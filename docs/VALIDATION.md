@@ -26,3 +26,17 @@ Before treating this preview as stable, perform these checks on two computers:
 The automated tests are not evidence that these interactive two-computer checks
 passed. See GitHub release notes for the checks actually completed for a build.
 
+## Initial preview checks completed
+
+- 33 automated tests passed locally, covering session negotiation, separate
+  modes, invitations, mute, stale/malformed frames, transport hooks, lock
+  cleanup, queue bounds and reproducible packaging.
+- Windows CI successfully compiled the x64 helper and checked Opus mono/stereo
+  encode/decode.
+- The compiled helper ran locally under a non-administrator token, enumerated
+  audio devices, and started/stopped process-loopback capture excluding a
+  target process tree. Packets were discarded; no microphone was opened.
+- Executable inspection confirmed an `asInvoker` manifest and imports only
+  from Windows DLLs (no separate VC++ runtime or Opus DLL).
+- Python files compile successfully. Full interactive testing with two NVDA
+  computers is still pending.

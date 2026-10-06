@@ -40,6 +40,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         self.transport = self.session = self.native = None
         self.old_parse = self.hooked_parse = None
         self.pair = None
+        self.remote_client = None
         self.last_hello = 0
         self.call_dialog = self.settings_dialog = None
         self.engine = Engine(self)
@@ -229,6 +230,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         try:
             import _remoteClient
             client = _remoteClient._remoteClient
+            if client is not self.remote_client:
+                self._local_scripts(self.remote_client, register=False)
+                self.remote_client = client
+                self._local_scripts(client, register=True)
             session = (client.leaderSession or client.followerSession) if client else None
             transport = session.transport if session else None
             if transport and transport.connected:
@@ -263,6 +268,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             self.engine.stop(announce=False)
             self.engine.disconnect()
             self.pair = None
+
+    def _local_scripts(self, client, register):
+        if client is None:
+            return
+        method = client.registerLocalScript if register else client.unregisterLocalScript
+        for name in ("startCall", "answerCall", "shareAudio", "stop", "muteMicrophone", "reportStatus"):
+            method(getattr(self, "script_" + name))
 
     def report_status(self):
         if not HELPER.is_file():
@@ -367,6 +379,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             super().terminate()
             return
         self.engine.stop(announce=False)
+        self._local_scripts(self.remote_client, register=False)
+        self.remote_client = None
         self.closed = True
         self._detach()
         post_sessionLockStateChanged.unregister(self._lock_changed)
