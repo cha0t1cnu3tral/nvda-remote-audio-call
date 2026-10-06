@@ -38,12 +38,13 @@ head-of-line blocking and audio-device latency can still add delay.
 Anonymous-pipe framing: little-endian 32-bit payload length, then one byte of
 kind and the payload. Types: 1 Opus packet, 2 microphone mute (one byte),
 3 volume (one byte, 0–100), 4 stop, 5 UTF-8 error (helper to plugin), 6 ready
-(helper to plugin). Closing/killing the child tears down audio devices. No
+(helper to plugin).
 Helper type 7 carries four little-endian uint32 values: encoded capture
 packets, decoded playback packets, samples consumed by the playback buffer,
 and the latest microphone peak (0–32768). These local health counters are
 not transmitted to the relay. `--mute 1` starts capture muted for diagnostic
 tests; the normal call starts unmuted only after user acceptance.
-audio files, listening sockets, elevated process, or persistent service exist.
+Closing/killing the child tears down audio devices. No audio files, listening
+sockets, elevated process, or persistent service exist.
 Capture and playback workers check the active input desktop at least every
 50 ms and stop on a secure or unavailable desktop, including UAC transitions.

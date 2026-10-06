@@ -10,16 +10,27 @@ and one controlled computer, then use **Tools → Remote Audio and Call**.
   dialog and updating menus do not run on the Remote network thread. A delayed
   disconnect callback cannot cancel a newly attached connection.
 - Report status explicitly explains when extra connected computers block calls.
+- Choose microphone and speakers directly from the Tools submenu or incoming
+  call window. The device controls have explicit accessible names.
+- Playback now fills the initial WASAPI buffer before starting the device.
+- Report status distinguishes microphone capture, missing remote audio,
+  playback startup and a silent selected microphone using native health data.
 
 Validation completed for this release:
 
-- 37 automated tests, including near-timeout answers, both Remote roles,
+- 38 automated tests, including near-timeout answers, both Remote roles,
   disconnect thread dispatch and stale disconnect callbacks.
 - Calls initiated from each side, capability negotiation, duplex synthetic
   packets and hang-up through TLS to nvdaremote.com in a random private room.
   No microphone audio was transmitted during this relay test.
+- The complete native duplex pipeline also passed through the public TLS
+  relay: real microphone capture and Opus encoding on both ends, relay delivery,
+  Opus decoding, and consumption by each WASAPI playback buffer. Microphones
+  were muted before capture started and playback volume was zero during this
+  check; it does not establish audible spoken-call quality.
 - Real wxPython from NVDA 2026.2: menu creation, incoming-call dialog, Answer
-  transition and teardown, with NVDA services stubbed and windows hidden.
+  transition, microphone/speaker selection and teardown, with NVDA services
+  stubbed and windows hidden.
 - Local microphone/playback startup, mono Opus capture and shutdown under a
   non-administrator account. Microphone packets were discarded in memory.
 - Helper codec self-test, device enumeration, process-loopback startup/shutdown,
