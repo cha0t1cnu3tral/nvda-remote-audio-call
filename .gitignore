@@ -1,0 +1,9 @@
+.reference-nvda/
+vendor/
+build/
+dist/
+__pycache__/
+*.pyc
+addon/globalPlugins/remoteAudioCall/bin/
+.test-artifacts/
+

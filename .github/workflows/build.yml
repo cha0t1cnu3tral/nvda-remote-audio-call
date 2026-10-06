@@ -1,0 +1,36 @@
+name: Build and test
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Python tests
+        run: python -m unittest discover -s tests -v
+      - name: Compile Python
+        run: python -m compileall -q addon scripts tests
+      - name: Configure native helper
+        run: cmake -S helper -B build -A x64 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+      - name: Build native helper
+        run: cmake --build build --config Release --parallel
+      - name: Native codec test
+        run: ./build/Release/remoteAudioHelper.exe --self-test
+      - name: Package add-on
+        run: python scripts/package.py --helper build/Release/remoteAudioHelper.exe
+      - name: Native dependency notices
+        shell: pwsh
+        run: |
+          Copy-Item build/_deps/opus-src/COPYING dist/OPUS-LICENSE.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remoteAudioCall
+          path: dist/*
+          if-no-files-found: error
+

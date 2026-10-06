@@ -1,0 +1,26 @@
+cmake_minimum_required(VERSION 3.24)
+project(RemoteAudioHelper LANGUAGES C CXX)
+if(NOT WIN32)
+  message(FATAL_ERROR "This helper requires Windows")
+endif()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+include(FetchContent)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(OPUS_DNN OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(opus
+  URL https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz
+  URL_HASH SHA256=6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(opus)
+add_executable(remoteAudioHelper main.cpp)
+target_compile_definitions(remoteAudioHelper PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(remoteAudioHelper PRIVATE /W4 /EHsc)
+target_link_libraries(remoteAudioHelper PRIVATE opus ole32 uuid mmdevapi propsys)
+target_link_options(remoteAudioHelper PRIVATE /MANIFEST:EMBED /MANIFESTUAC:level='asInvoker')
+install(TARGETS remoteAudioHelper RUNTIME DESTINATION bin)
+
