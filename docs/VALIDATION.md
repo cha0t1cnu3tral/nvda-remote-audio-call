@@ -38,5 +38,9 @@ passed. See GitHub release notes for the checks actually completed for a build.
   target process tree. Packets were discarded; no microphone was opened.
 - Executable inspection confirmed an `asInvoker` manifest and imports only
   from Windows DLLs (no separate VC++ runtime or Opus DLL).
+- A separate Python 3.13 process loaded the wxPython shipped with NVDA 2026.2
+  and verified actual Tools menu creation, state changes, event bindings, and
+  teardown with NVDA services stubbed. No windows were shown and the running
+  NVDA profile was untouched.
 - Python files compile successfully. Full interactive testing with two NVDA
   computers is still pending.

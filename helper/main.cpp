@@ -98,9 +98,18 @@ WAVEFORMATEX format(int channels) {
     WAVEFORMATEX f{}; f.wFormatTag=WAVE_FORMAT_PCM; f.nChannels=static_cast<WORD>(channels); f.nSamplesPerSec=RATE;
     f.wBitsPerSample=16; f.nBlockAlign=f.nChannels*2; f.nAvgBytesPerSec=RATE*f.nBlockAlign; return f;
 }
+void requireUserDesktop() {
+    HDESK desktop=OpenInputDesktop(0,FALSE,DESKTOP_READOBJECTS);
+    if(!desktop) throw std::runtime_error("Audio stopped because Windows switched to a secure or unavailable desktop");
+    wchar_t name[128]{}; DWORD needed=0;
+    bool normal=GetUserObjectInformationW(desktop,UOI_NAME,name,sizeof(name),&needed) && _wcsicmp(name,L"Default")==0;
+    CloseDesktop(desktop);
+    if(!normal) throw std::runtime_error("Audio stopped because Windows switched desktops");
+}
 void capture(const std::wstring& mode, int channels, DWORD pid, const std::wstring& input) {
     try {
         ComScope com;
+        requireUserDesktop();
         auto c=mode==L"system" ? systemClient(pid) : deviceClient(eCapture,input);
         auto f=format(channels); DWORD flags=AUDCLNT_STREAMFLAGS_EVENTCALLBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
         if(mode==L"system") flags|=AUDCLNT_STREAMFLAGS_LOOPBACK;
@@ -115,6 +124,8 @@ void capture(const std::wstring& mode, int channels, DWORD pid, const std::wstri
         check(c->Start(),"Cannot start audio capture"); ++started;
         while(running) {
             WaitForSingleObject(event.value,50);
+            if(!running) break;
+            requireUserDesktop();
             UINT32 available=0; check(source->GetNextPacketSize(&available),"Capture device was lost");
             while(available && running) {
                 BYTE* data=nullptr; UINT32 frames=0; DWORD status=0;
@@ -139,7 +150,7 @@ void capture(const std::wstring& mode, int channels, DWORD pid, const std::wstri
 }
 void render(int channels, const std::wstring& output) {
     try {
-        ComScope com; auto c=deviceClient(eRender,output); auto f=format(channels);
+        ComScope com; requireUserDesktop(); auto c=deviceClient(eRender,output); auto f=format(channels);
         check(c->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_EVENTCALLBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,0,0,&f,nullptr),"Cannot initialize playback");
         Handle event(CreateEventW(nullptr,FALSE,FALSE,nullptr)); check(c->SetEventHandle(event.value),"Playback event failed");
         ComPtr<IAudioRenderClient> dest; check(c->GetService(IID_PPV_ARGS(&dest)),"Playback service unavailable");
@@ -147,6 +158,8 @@ void render(int channels, const std::wstring& output) {
         check(c->Start(),"Cannot start playback"); ++started;
         while(running) {
             WaitForSingleObject(event.value,50);
+            if(!running) break;
+            requireUserDesktop();
             UINT32 padding=0; check(c->GetCurrentPadding(&padding),"Playback device was lost");
             UINT32 available=capacity-padding; if(!available) continue;
             BYTE* data=nullptr; check(dest->GetBuffer(available,&data),"Cannot get playback buffer");

@@ -20,6 +20,8 @@ Validated: automated session/transport/queue/package tests, Windows compilation,
 native Opus mono/stereo tests, local device enumeration and process-loopback
 startup/shutdown under a non-administrator token, and executable manifest/DLL
 inspection. No microphone was opened in local smoke checks.
+Real wxPython menu creation/state changes/teardown also passed using the
+toolkit installed with NVDA 2026.2, with NVDA services stubbed.
 
 This is a **preview**. Full interactive two-computer NVDA testing is still
 pending. Existing Remote relay servers must forward extension messages; the
@@ -27,4 +29,3 @@ relay operator can access audio just as they can access ordinary Remote data.
 
 The SHA-256 checksum is attached as `SHA256SUMS.txt`. The complete source and
 manual verification checklist are in the repository.
-

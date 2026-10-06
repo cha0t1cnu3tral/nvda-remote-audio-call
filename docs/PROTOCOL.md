@@ -37,4 +37,5 @@ kind and the payload. Types: 1 Opus packet, 2 microphone mute (one byte),
 3 volume (one byte, 0–100), 4 stop, 5 UTF-8 error (helper to plugin), 6 ready
 (helper to plugin). Closing/killing the child tears down audio devices. No
 audio files, listening sockets, elevated process, or persistent service exist.
-
+Capture and playback workers check the active input desktop at least every
+50 ms and stop on a secure or unavailable desktop, including UAC transitions.

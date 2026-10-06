@@ -20,7 +20,6 @@ FetchContent_MakeAvailable(opus)
 add_executable(remoteAudioHelper main.cpp)
 target_compile_definitions(remoteAudioHelper PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(remoteAudioHelper PRIVATE /W4 /EHsc)
-target_link_libraries(remoteAudioHelper PRIVATE opus ole32 uuid mmdevapi propsys)
+target_link_libraries(remoteAudioHelper PRIVATE opus ole32 uuid mmdevapi propsys user32)
 target_link_options(remoteAudioHelper PRIVATE /MANIFEST:EMBED /MANIFESTUAC:level='asInvoker')
 install(TARGETS remoteAudioHelper RUNTIME DESTINATION bin)
-
