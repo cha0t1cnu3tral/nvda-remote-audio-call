@@ -111,6 +111,8 @@ class Engine:
         self.state = "answering_call"
         self.deadline = self.clock() + 15
         self.backend.changed()
+        # Device initialization can outlast the invitation's remaining time.
+        self.send("call_answering")
         self._start_helper("call")
 
     @synchronized
@@ -239,7 +241,9 @@ class Engine:
             return
         if token != self.token:
             return
-        if action == "call_accept" and self.state == "outgoing_call":
+        if action == "call_answering" and self.state == "outgoing_call":
+            self.deadline = self.clock() + 15
+        elif action == "call_accept" and self.state == "outgoing_call":
             self.state = "connecting_call"
             self.deadline = self.clock() + 15
             self.backend.changed()

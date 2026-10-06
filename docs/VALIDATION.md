@@ -26,6 +26,22 @@ Before treating this preview as stable, perform these checks on two computers:
 The automated tests are not evidence that these interactive two-computer checks
 passed. See GitHub release notes for the checks actually completed for a build.
 
+## 0.1.1 call checks completed
+
+- 37 automated tests passed, including answering near the ring timeout,
+  discovery of both built-in Remote roles and UI-thread disconnect cleanup.
+- `python scripts/smoke_relay.py --server nvdaremote.com` passed capability
+  negotiation, calls initiated in both directions, duplex synthetic packets
+  and hang-up through TLS in a random private room. No microphone was opened
+  by this test, and no user's existing Remote channel was joined.
+- `python scripts/smoke_helper.py <helper.exe> --call --loopback` passed local
+  microphone/playback initialization, mono Opus capture and clean shutdown,
+  as well as the earlier native checks, under a non-administrator account.
+  Microphone packets were discarded in memory and never sent to a network.
+- The real NVDA 2026.2 wxPython smoke check now also builds a hidden incoming
+  call dialog and verifies Answer destroys it and enters the waiting state.
+- Full interactive spoken calls between two NVDA computers remain pending.
+
 ## Initial preview checks completed
 
 - 33 automated tests passed locally, covering session negotiation, separate

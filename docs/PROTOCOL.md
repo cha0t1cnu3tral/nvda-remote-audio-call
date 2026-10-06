@@ -11,6 +11,9 @@ Only the opposite-role peer in a two-client session is accepted.
 
 Call flow: `call_offer` → user Answer → callee helper ready → `call_accept` →
 caller helper ready → `call_ready`. Both sides can then exchange frames.
+Answer immediately sends `call_answering` to give the caller a fresh 15-second
+device-startup timeout, even when the invitation is answered near 30 seconds.
+Older peers ignore this optional message; install 0.1.1 on both ends for the fix.
 Invitations time out at 30 seconds; device setup at 15 seconds. Simultaneous
 invitations converge on the lexicographically smaller invitation token.
 `decline` or `stop` ends the matching stream.

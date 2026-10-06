@@ -9,7 +9,7 @@ replace a two-computer test with NVDA; see [validation](docs/VALIDATION.md).
 
 ## Install
 
-Download `remoteAudioCall-0.1.0.nvda-addon` from
+Download `remoteAudioCall-0.1.1.nvda-addon` from
 [Releases](https://github.com/cha0t1cnu3tral/nvda-remote-audio-call/releases).
 Open the file, confirm installation in NVDA, and restart NVDA. Install it on
 both computers. Use a user-writable NVDA configuration or a portable NVDA copy
@@ -105,9 +105,8 @@ cmake --build build --config Release --parallel
 python scripts/package.py --helper build/Release/remoteAudioHelper.exe
 ```
 
-Output: `dist/remoteAudioCall-0.1.0.nvda-addon` and `dist/SHA256SUMS.txt`.
+Output: `dist/remoteAudioCall-0.1.1.nvda-addon` and `dist/SHA256SUMS.txt`.
 GitHub Actions builds the same archive on each push. Opus 1.6.1 is downloaded
 with a pinned SHA-256 and linked statically, along with the C++ runtime. The
 helper uses an `asInvoker` manifest and communicates through anonymous pipes.
 See [protocol details](docs/PROTOCOL.md) and [third-party notices](THIRD_PARTY_NOTICES.md).
-

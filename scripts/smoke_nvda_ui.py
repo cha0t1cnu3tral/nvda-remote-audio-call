@@ -89,12 +89,27 @@ def main():
         plugin.engine._new("incoming_call")
         assert plugin.items["answer"][0].IsEnabled()
         assert plugin.items["decline"][0].IsEnabled()
+        # Build the actual incoming-call dialog, but keep it hidden.
+        original_dialog = wx.Dialog
+        class HiddenDialog(original_dialog):
+            def Show(self, *args, **kwargs): return True
+            def Raise(self): pass
+        wx.Dialog = HiddenDialog
+        try:
+            plugin.incoming_call()
+            assert plugin.call_dialog is not None
+            plugin.start_audio = lambda kind, ready, packet, error: ready()
+            plugin.engine.answer()
+            assert plugin.call_dialog is None
+            assert plugin.engine.state == "waiting_call"
+        finally:
+            wx.Dialog = original_dialog
         plugin.terminate()
         assert frame.toolsMenu.GetMenuItemCount() == 0
         assert not lock_action.handlers
         assert not transport.transportClosing.handlers
         assert not transport.transportDisconnected.handlers
-        print("Real wx Tools menu creation, state changes, event binding and teardown passed")
+        print("Real wx Tools menu, incoming-call dialog, Answer transition and teardown passed")
     frame.Destroy()
     app.Destroy()
     sys.meta_path.remove(finder)
@@ -103,4 +118,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

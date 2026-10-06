@@ -1,4 +1,4 @@
-"""Local standard-user smoke checks; no microphone capture or audio files.
+"""Local standard-user smoke checks; no audio files or network transmission.
 
 System capture is opened briefly to check process-loopback startup. Captured
 packets are discarded in memory. Nothing is sent to a network or played.
@@ -43,6 +43,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("helper", type=Path)
     parser.add_argument("--loopback", action="store_true")
+    parser.add_argument("--call", action="store_true", help="Briefly open microphone and playback; discard microphone packets")
     args = parser.parse_args()
     helper = args.helper.resolve()
     binary = helper.read_bytes()
@@ -80,8 +81,43 @@ def main():
             raw = raw[4+size:]
         assert 6 in types, "Helper never reported ready"
         print("Process-loopback exclusion startup/shutdown passed; packets discarded, no playback")
+    if args.call:
+        import threading
+        import time
+        process = subprocess.Popen([str(helper), "--capture", "mic", "--channels", "1", "--play", "1"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        types, errors = [], []
+        def read():
+            while True:
+                header = process.stdout.read(4)
+                if not header:
+                    return
+                size = struct.unpack("<I", header)[0]
+                data = process.stdout.read(size)
+                types.append(data[0])
+                if data[0] == 5:
+                    errors.append(data[1:].decode("utf-8", "replace"))
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        try:
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline and not errors and (6 not in types or types.count(1) < 10):
+                time.sleep(.02)
+            assert not errors, errors
+            assert 6 in types and types.count(1) >= 10, "Call helper did not capture microphone frames"
+            process.stdin.write(struct.pack("<I", 1) + b"\x04")
+            process.stdin.flush()
+            assert process.wait(timeout=5) == 0
+            print("Call microphone/playback startup, mono Opus capture and shutdown passed; packets discarded, no network transmission")
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            reader.join(timeout=2)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                stream.close()
 
 
 if __name__ == "__main__":
     main()
-

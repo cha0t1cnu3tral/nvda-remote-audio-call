@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import queue
 import sys
+import threading
 from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -119,10 +120,44 @@ class AdapterTests(unittest.TestCase):
         self.assertFalse(self.transport.transportClosing.handlers)
         self.assertFalse(self.transport.transportDisconnected.handlers)
 
+    def test_network_disconnect_defers_dialog_cleanup_to_ui_thread(self):
+        pending = []
+        with patch.object(self.plugin_module.wx, "CallAfter", side_effect=lambda *args: pending.append(args)):
+            worker = threading.Thread(target=self.plugin._connection_ended)
+            worker.start()
+            worker.join(timeout=2)
+        self.assertEqual(self.plugin.engine.peer, 2)
+        self.assertEqual(len(pending), 1)
+        callback, *args = pending[0]
+        callback(*args)
+        self.assertIsNone(self.plugin.engine.peer)
+
+    def test_old_disconnect_callback_does_not_end_new_connection(self):
+        old = self.transport
+        self.plugin._attach(Transport(), self.session)
+        self.plugin.engine.connect("controlling", 2)
+        self.plugin._finish_connection_ended(old)
+        self.assertEqual(self.plugin.engine.peer, 2)
+
+    def test_tick_discovers_builtin_remote_session_in_each_role(self):
+        for role in ("controlling", "controlled"):
+            self.plugin._detach()
+            session = SimpleNamespace(transport=self.transport,
+                leaders={} if role == "controlling" else {2: {}},
+                followers={2: {}} if role == "controlling" else set())
+            client = SimpleNamespace(leaderSession=session if role == "controlling" else None,
+                followerSession=session if role == "controlled" else None,
+                registerLocalScript=Mock(), unregisterLocalScript=Mock())
+            self.plugin.remote_client = None
+            with patch.dict(sys.modules, {"_remoteClient": SimpleNamespace(_remoteClient=client)}):
+                self.plugin._tick()
+            self.assertEqual(self.plugin.engine.role, role)
+            self.assertEqual(self.plugin.engine.peer, 2)
+            client.registerLocalScript.assert_called()
+
     def test_third_participant_disables_stream_immediately(self):
         self.assertTrue(self.plugin.allowed())
         self.session.followers[3] = {}
         self.assertFalse(self.plugin.allowed())
         self.plugin.send(dict(action="frame", protocol=1, token="f"*32))
         self.assertTrue(self.transport.queue.empty())
-

@@ -211,6 +211,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             self.engine.receive(data, origin)
 
     def _connection_ended(self, **kwargs):
+        # Remote invokes disconnect handlers on its network thread. wx menus
+        # and the incoming-call dialog must only be touched on the UI thread.
+        transport = self.transport
+        if threading.current_thread() is not threading.main_thread():
+            wx.CallAfter(self._finish_connection_ended, transport)
+            return
+        self._finish_connection_ended(transport)
+
+    def _finish_connection_ended(self, transport):
+        if self.transport is not transport:
+            return
         self.engine.disconnect()
         self.pair = None
 
@@ -280,7 +291,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if not HELPER.is_file():
             self.notify("Audio helper missing. Reinstall the packaged add-on")
         elif self.engine.peer is None:
-            self.notify("Off. Connect exactly one controller and one controlled computer in Remote Access")
+            count = len(self.session.leaders) + len(self.session.followers) if self.session else 0
+            if count > 1:
+                self.notify("Off. More than one other computer is connected. Calls require exactly one controller and one controlled computer")
+            else:
+                self.notify("Off. Connect exactly one controller and one controlled computer in Remote Access")
         elif not self.engine.capable:
             self.notify("Off. Waiting for the other computer's add-on. Both computers must install Remote Audio and Call")
         else:

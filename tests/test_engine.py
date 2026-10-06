@@ -105,6 +105,21 @@ class SessionTests(unittest.TestCase):
         self.assertFalse(self.a.helpers)
         self.assertFalse(self.b.helpers)
 
+    def test_answer_near_ring_timeout_allows_device_startup(self):
+        self.controller.start_call()
+        self.flush()
+        self.now += 29
+        self.b.auto_ready = False
+        self.controlled.answer()
+        self.flush()
+        self.now += 2
+        self.controller.tick()
+        self.flush()
+        self.assertEqual(self.controller.state, "outgoing_call")
+        self.b.pending_ready()
+        self.flush()
+        self.assertEqual((self.controller.state, self.controlled.state), ("call", "call"))
+
     def test_timeout_clears_remote_invitation(self):
         self.controller.start_call()
         self.flush()
@@ -261,4 +276,3 @@ class SessionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
