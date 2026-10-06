@@ -15,8 +15,8 @@ def enumerate_devices():
                             creationflags=subprocess.CREATE_NO_WINDOW, timeout=10)
     if result.returncode:
         raise RuntimeError(result.stderr.decode("utf-8", "replace").strip() or "Cannot list audio devices")
-    devices = {"input": [("default", "Windows default microphone")],
-               "output": [("default", "Windows default playback device")]}
+    devices = {"input": [("default", "Windows default communications microphone")],
+               "output": [("default", "Windows default communications playback device")]}
     for line in result.stdout.decode("utf-8", "replace").splitlines():
         fields = line.split("\t", 2)
         if len(fields) == 3 and fields[0] in devices:
@@ -25,12 +25,13 @@ def enumerate_devices():
 
 
 class NativeAudio:
-    def __init__(self, kind, settings, ready, packet, error, dispatch):
+    def __init__(self, kind, settings, ready, packet, error, dispatch, initial_muted=False):
         self.ready, self.packet, self.error, self.dispatch = ready, packet, error, dispatch
         self.active = threading.Event()
         self.active.set()
         self.media = queue.Queue(maxsize=6)
         self.controls = queue.Queue()
+        self.stats = (0, 0, 0, 0)
         capture, channels, play = {"call": ("mic", 1, True),
                                    "send": ("system", 2, False),
                                    "receive": ("none", 2, True)}[kind]
@@ -38,7 +39,7 @@ class NativeAudio:
             str(HELPER), "--capture", capture, "--channels", str(channels),
             "--play", str(int(play)), "--nvda-pid", str(os.getpid()),
             "--input", settings["input"], "--output", settings["output"],
-            "--volume", str(settings["volume"])
+            "--volume", str(settings["volume"]), "--mute", str(int(initial_muted))
         ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW, bufsize=0)
         threading.Thread(target=self._read, daemon=True, name="RemoteAudioRead").start()
@@ -70,6 +71,8 @@ class NativeAudio:
                     self.packet(data[1:])
                 elif data[0] == 6:
                     self.dispatch(self.ready)
+                elif data[0] == 7 and len(data) == 17:
+                    self.stats = struct.unpack("<IIII", data[1:])
                 elif data[0] == 5:
                     self._fail(data[1:].decode("utf-8", "replace"))
                     break
@@ -140,4 +143,3 @@ class NativeAudio:
                 except OSError:
                     pass
         threading.Thread(target=reap, daemon=True, name="RemoteAudioCleanup").start()
-

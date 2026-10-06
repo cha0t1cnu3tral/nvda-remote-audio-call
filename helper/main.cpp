@@ -29,6 +29,7 @@ using namespace std::chrono_literals;
 constexpr int RATE = 48000, FRAME = 960, MAX_PACKET = 1275;
 std::atomic<bool> running{true}, muted{false};
 std::atomic<int> volume{100}, started{0};
+std::atomic<uint32_t> capturedPackets{0}, decodedPackets{0}, renderedSamples{0}, microphonePeak{0};
 std::mutex outputMutex, pcmMutex;
 std::deque<int16_t> pcm;
 
@@ -132,6 +133,12 @@ void capture(const std::wstring& mode, int channels, DWORD pid, const std::wstri
                 check(source->GetBuffer(&data,&frames,&status,nullptr,nullptr),"Cannot read audio capture");
                 if(status&AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) pending.clear();
                 size_t n=static_cast<size_t>(frames)*channels;
+                uint32_t peak=0;
+                if(mode==L"mic" && !(status&AUDCLNT_BUFFERFLAGS_SILENT)) {
+                    auto samples=reinterpret_cast<int16_t*>(data);
+                    for(size_t i=0;i<n;++i) peak=std::max(peak,static_cast<uint32_t>(std::abs(static_cast<int>(samples[i]))));
+                    microphonePeak=peak;
+                }
                 if(status&AUDCLNT_BUFFERFLAGS_SILENT || muted) pending.insert(pending.end(),n,0);
                 else pending.insert(pending.end(),reinterpret_cast<int16_t*>(data),reinterpret_cast<int16_t*>(data)+n);
                 check(source->ReleaseBuffer(frames),"Cannot release captured audio");
@@ -139,7 +146,7 @@ void capture(const std::wstring& mode, int channels, DWORD pid, const std::wstri
                 while(pending.size()-offset>=static_cast<size_t>(FRAME*channels)) {
                     unsigned char packet[MAX_PACKET]; int count=opus_encode(encoder.get(),pending.data()+offset,FRAME,packet,MAX_PACKET);
                     if(count<0) throw std::runtime_error("Audio encoding failed");
-                    sendFrame(1,packet,count); offset+=FRAME*channels;
+                    sendFrame(1,packet,count); ++capturedPackets; offset+=FRAME*channels;
                 }
                 pending.erase(pending.begin(),pending.begin()+offset);
                 check(source->GetNextPacketSize(&available),"Capture device was lost");
@@ -155,6 +162,8 @@ void render(int channels, const std::wstring& output) {
         Handle event(CreateEventW(nullptr,FALSE,FALSE,nullptr)); check(c->SetEventHandle(event.value),"Playback event failed");
         ComPtr<IAudioRenderClient> dest; check(c->GetService(IID_PPV_ARGS(&dest)),"Playback service unavailable");
         UINT32 capacity=0; check(c->GetBufferSize(&capacity),"Cannot size playback buffer");
+        BYTE* initial=nullptr; check(dest->GetBuffer(capacity,&initial),"Cannot prime playback buffer");
+        check(dest->ReleaseBuffer(capacity,AUDCLNT_BUFFERFLAGS_SILENT),"Cannot prime playback silence");
         check(c->Start(),"Cannot start playback"); ++started;
         while(running) {
             WaitForSingleObject(event.value,50);
@@ -163,15 +172,16 @@ void render(int channels, const std::wstring& output) {
             UINT32 padding=0; check(c->GetCurrentPadding(&padding),"Playback device was lost");
             UINT32 available=capacity-padding; if(!available) continue;
             BYTE* data=nullptr; check(dest->GetBuffer(available,&data),"Cannot get playback buffer");
-            auto out=reinterpret_cast<int16_t*>(data); int gain=volume.load();
+            auto out=reinterpret_cast<int16_t*>(data); int gain=volume.load(); uint32_t consumed=0;
             {
                 std::lock_guard<std::mutex> lock(pcmMutex);
                 for(size_t i=0;i<static_cast<size_t>(available)*channels;++i) {
                     if(pcm.empty()) out[i]=0;
-                    else { out[i]=static_cast<int16_t>(static_cast<int>(pcm.front())*gain/100); pcm.pop_front(); }
+                    else { out[i]=static_cast<int16_t>(static_cast<int>(pcm.front())*gain/100); pcm.pop_front(); ++consumed; }
                 }
             }
             check(dest->ReleaseBuffer(available,0),"Cannot release playback buffer");
+            renderedSamples+=consumed;
         }
         c->Stop();
     } catch(const std::exception& e) { failure(e); }
@@ -216,6 +226,7 @@ int wmain(int argc, wchar_t** argv) {
             else if(flag==L"--output") output=value;
             else if(flag==L"--play") play=value==L"1";
             else if(flag==L"--volume") volume=std::clamp(std::stoi(value),0,100);
+            else if(flag==L"--mute") muted=value==L"1";
             else throw std::runtime_error("Unknown helper argument");
         }
         if((channels!=1 && channels!=2) || (mode!=L"none" && mode!=L"mic" && mode!=L"system") || (mode==L"system" && !pid)) throw std::runtime_error("Invalid helper configuration");
@@ -230,6 +241,17 @@ int wmain(int argc, wchar_t** argv) {
         while(running && started<expected && std::chrono::steady_clock::now()<deadline) std::this_thread::sleep_for(10ms);
         if(running && started==expected) sendFrame(6);
         else { running=false; std::string msg="Audio devices did not start"; sendFrame(5,msg.data(),msg.size()); }
+        std::thread health([] {
+            int ticks=0;
+            while(running) {
+                std::this_thread::sleep_for(100ms);
+                if(running && ++ticks==10) {
+                    ticks=0;
+                    uint32_t stats[]={capturedPackets.load(),decodedPackets.load(),renderedSamples.load(),microphonePeak.load()};
+                    sendFrame(7,stats,sizeof(stats));
+                }
+            }
+        });
         // On worker failure parent receives type 5 and closes stdin, unblocking this read.
         while(running) {
             uint32_t size=0; if(!readAll(&size,4)) break;
@@ -243,6 +265,7 @@ int wmain(int argc, wchar_t** argv) {
             std::vector<int16_t> samples(FRAME*channels);
             int frames=opus_decode(decoder.get(),data.data()+1,size-1,samples.data(),FRAME,0);
             if(frames!=FRAME) continue;
+            ++decodedPackets;
             std::lock_guard<std::mutex> lock(pcmMutex);
             constexpr int BUFFER_FRAMES=6;
             while(pcm.size()+samples.size()>static_cast<size_t>(BUFFER_FRAMES*FRAME*channels)) {
@@ -251,6 +274,6 @@ int wmain(int argc, wchar_t** argv) {
             }
             pcm.insert(pcm.end(),samples.begin(),samples.end());
         }
-        running=false; if(sender.joinable()) sender.join(); if(receiver.joinable()) receiver.join(); return started==expected?0:1;
+        running=false; if(sender.joinable()) sender.join(); if(receiver.joinable()) receiver.join(); health.join(); return started==expected?0:1;
     } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; }
 }

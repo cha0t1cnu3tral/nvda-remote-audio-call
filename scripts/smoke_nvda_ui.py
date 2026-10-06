@@ -74,7 +74,7 @@ def main():
         spec.loader.exec_module(module)
         plugin = module.GlobalPlugin()
         assert frame.toolsMenu.GetMenuItemCount() == 1
-        assert plugin.menu.GetMenuItemCount() == 8
+        assert plugin.menu.GetMenuItemCount() == 9
         assert not plugin.items["call"][0].IsEnabled()
         transport = Transport()
         session = SimpleNamespace(leaders={}, followers={2: {}}, transport=transport)
@@ -94,6 +94,11 @@ def main():
         class HiddenDialog(original_dialog):
             def Show(self, *args, **kwargs): return True
             def Raise(self): pass
+            def ShowModal(self):
+                for child in self.GetChildren():
+                    if isinstance(child, wx.Choice):
+                        child.SetSelection(1)
+                return wx.ID_OK
         wx.Dialog = HiddenDialog
         try:
             plugin.incoming_call()
@@ -102,6 +107,11 @@ def main():
             plugin.engine.answer()
             assert plugin.call_dialog is None
             assert plugin.engine.state == "waiting_call"
+            plugin._show_settings({"input": [("default", "Default microphone"), ("selected-mic", "Selected microphone")],
+                "output": [("default", "Default speakers"), ("selected-output", "Selected speakers")]})
+            assert plugin.settings["input"] == "selected-mic"
+            assert plugin.settings["output"] == "selected-output"
+            assert plugin.settings_path.is_file()
         finally:
             wx.Dialog = original_dialog
         plugin.terminate()
@@ -109,7 +119,7 @@ def main():
         assert not lock_action.handlers
         assert not transport.transportClosing.handlers
         assert not transport.transportDisconnected.handlers
-        print("Real wx Tools menu, incoming-call dialog, Answer transition and teardown passed")
+        print("Real wx Tools menu, incoming-call dialog, Answer, microphone/speaker selection and teardown passed")
     frame.Destroy()
     app.Destroy()
     sys.meta_path.remove(finder)

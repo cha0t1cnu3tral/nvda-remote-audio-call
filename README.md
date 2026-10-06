@@ -37,6 +37,11 @@ both ends must support forwarding custom protocol messages.
 
 ## Call mode
 
+Choose **Tools → Remote Audio and Call → Choose microphone and speakers** on
+each computer before calling. Select the microphone and headphones/speakers
+you actually use, then save. Device changes apply to the next call. The
+incoming-call window also has a **Microphone and speakers** button.
+
 1. Open **NVDA → Tools → Remote Audio and Call → Start call** on either computer.
 2. The other computer rings and presents **Answer** and **Decline**. Those
    actions are also available in the Tools submenu.
@@ -86,6 +91,10 @@ desktops, login screens, and elevation prompts do not carry audio.
   relay forwards custom messages.
 - **Microphone error:** check Windows desktop-app microphone permissions and
   choose an available microphone in Settings.
+- **Call connects without sound:** use **Choose microphone and speakers** on
+  both computers and restart the call. **Report status** distinguishes missing
+  microphone frames, no received audio, and playback that has not started.
+  The Windows communications default can differ from your usual sound device.
 - **Device unplugged:** the stream stops. Select an available device and restart.
 - **Sound delayed:** the existing Remote TCP connection carries audio. Poor
   networks can delay it; queues are bounded to avoid growing backlogs. This

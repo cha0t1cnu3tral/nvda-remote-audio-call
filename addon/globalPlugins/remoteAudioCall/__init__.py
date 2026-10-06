@@ -61,6 +61,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             ("audio", "Share computer &audio (excluding NVDA)", lambda event: self.engine.start_system_audio()),
             ("stop", "&Stop audio or hang up", lambda event: self.engine.stop()),
             ("mute", "&Mute microphone", lambda event: self.engine.toggle_mute()),
+            ("devices", "Choose &microphone and speakers...", self.on_settings),
             ("settings", "&Settings...", self.on_settings),
             ("status", "Report s&tatus", lambda event: self.report_status()),
         ]
@@ -130,10 +131,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         decline = wx.Button(dialog, label="&Decline")
         row.Add(answer, 0, wx.ALL, 6)
         row.Add(decline, 0, wx.ALL, 6)
+        devices = wx.Button(dialog, label="&Microphone and speakers...")
+        row.Add(devices, 0, wx.ALL, 6)
         layout.Add(row, 0, wx.ALIGN_RIGHT | wx.ALL, 6)
         dialog.SetSizerAndFit(layout)
         answer.Bind(wx.EVT_BUTTON, lambda event: self.engine.answer())
         decline.Bind(wx.EVT_BUTTON, lambda event: self.engine.decline())
+        devices.Bind(wx.EVT_BUTTON, self.on_settings)
         dialog.Bind(wx.EVT_CLOSE, lambda event: self.engine.decline())
         dialog.Bind(wx.EVT_CHAR_HOOK, lambda event: self.engine.decline() if event.GetKeyCode() == wx.WXK_ESCAPE else event.Skip())
         gui.mainFrame.prePopup()
@@ -303,6 +307,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             if self.engine.state == "audio":
                 state = "Sharing computer audio" if self.engine.role == "controlled" else "Listening to computer audio"
             suffix = ". Microphone muted" if self.engine.muted else ""
+            if self.engine.state == "call" and self.native:
+                captured, decoded, rendered, peak = self.native.stats
+                if not captured:
+                    suffix += ". Waiting for microphone audio"
+                elif not decoded:
+                    suffix += ". No audio received from the other computer"
+                elif not rendered:
+                    suffix += ". Audio received, waiting for playback"
+                elif not self.engine.muted and peak == 0:
+                    suffix += ". Microphone is silent. Check the selected microphone"
+                else:
+                    suffix += ". Two-way audio is flowing"
             self.notify(state + suffix)
 
     def on_settings(self, event=None):
@@ -334,6 +350,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         for key, label in (("input", "&Microphone:"), ("output", "&Playback device:")):
             layout.Add(wx.StaticText(dialog, label=label), 0, wx.LEFT | wx.TOP, 12)
             choice = wx.Choice(dialog, choices=[name for _, name in devices[key]])
+            choice.SetName("Microphone" if key == "input" else "Playback device")
             ids = [device for device, _ in devices[key]]
             selected = ids.index(self.settings[key]) if self.settings[key] in ids else 0
             choice.SetSelection(selected)
@@ -341,6 +358,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             controls[key] = choice
         layout.Add(wx.StaticText(dialog, label="Listening &volume (0 to 100):"), 0, wx.LEFT, 12)
         volume = wx.SpinCtrl(dialog, min=0, max=100, initial=self.settings["volume"])
+        volume.SetName("Listening volume")
         layout.Add(volume, 0, wx.EXPAND | wx.ALL, 12)
         layout.Add(wx.StaticText(dialog, label="Device changes apply next time audio starts. Use headphones for calls.\nComputer audio excludes NVDA across all output devices."), 0, wx.ALL, 12)
         layout.Add(dialog.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 12)

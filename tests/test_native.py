@@ -1,7 +1,10 @@
 import importlib.util
+import io
 from pathlib import Path
 import queue
 import threading
+import struct
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +14,19 @@ spec.loader.exec_module(native)
 
 
 class NativeTests(unittest.TestCase):
+    def test_helper_health_is_read_without_becoming_audio(self):
+        audio = native.NativeAudio.__new__(native.NativeAudio)
+        audio.active = threading.Event()
+        audio.active.set()
+        health = b"\x07" + struct.pack("<IIII", 50, 40, 38400, 1200)
+        audio.process = SimpleNamespace(stdout=io.BytesIO(struct.pack("<I", len(health)) + health + struct.pack("<I", 1) + b"\x06"))
+        audio.dispatch = lambda function, *args: function(*args)
+        audio.ready = audio.active.clear
+        audio.packet = lambda packet: self.fail("Health data treated as audio")
+        audio.error = lambda error: self.fail(error)
+        audio._read()
+        self.assertEqual(audio.stats, (50, 40, 38400, 1200))
+
     def test_media_queue_discards_oldest_frame(self):
         audio = native.NativeAudio.__new__(native.NativeAudio)
         audio.active = threading.Event()
@@ -48,4 +64,3 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(devices["input"][0][0], "default")
         self.assertEqual(devices["input"][1], ("device-123", "Mic é"))
         self.assertEqual(devices["output"][1][0], "device-456")
-
