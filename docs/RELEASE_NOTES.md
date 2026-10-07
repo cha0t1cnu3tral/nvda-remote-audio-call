@@ -1,46 +1,28 @@
-﻿# Remote Audio and Call 0.1.1 — call fixes preview
+# Remote Audio and Call 0.1.2: reconnect and simultaneous audio fixes
 
-Install **remoteAudioCall-0.1.1.nvda-addon** on both computers and restart
-NVDA. Connect through **Tools → Remote Access** with exactly one controller
-and one controlled computer, then use **Tools → Remote Audio and Call**.
+Install **remoteAudioCall-0.1.2.nvda-addon** on both computers and restart NVDA.
 
-- Answering near the 30-second ringing timeout now gives the caller time to
-  initialize audio devices, instead of ending the call during startup.
-- Disconnect cleanup runs on NVDA's UI thread, so closing an incoming-call
-  dialog and updating menus do not run on the Remote network thread. A delayed
-  disconnect callback cannot cancel a newly attached connection.
-- Report status explicitly explains when extra connected computers block calls.
-- Choose microphone and speakers directly from the Tools submenu or incoming
-  call window. The device controls have explicit accessible names.
-- Playback now fills the initial WASAPI buffer before starting the device.
-- Report status distinguishes microphone capture, missing remote audio,
-  playback startup and a silent selected microphone using native health data.
+- Voice calls and shared computer audio now run together. Starting or answering
+  a call preserves computer audio; starting audio during a call preserves the
+  call. Microphone mute affects only voice. Stop audio or hang up stops both.
+- A disconnect immediately closes both audio helpers and resets their sessions.
+  After Remote reconnects, capability negotiation restores available controls.
+  Start a new call or audio share after reconnecting.
+- Fresh relay membership replaces stale participant IDs, fixing controls that
+  could remain unavailable after reconnecting. Delayed disconnect events cannot
+  reset a newer connection, including a reconnect using the same transport.
+- A voice or computer-audio helper failure stops only the affected stream.
 
-Validation completed for this release:
+Validation: 50 automated tests; real NVDA 2026.2 wxPython menu/dialog checks
+with NVDA services stubbed; simultaneous synthetic voice/computer-audio frames
+through a public TLS relay; native mono/stereo codec self-test, device enumeration
+and executable inspection. Native duplex calls also passed through the relay
+in both directions, with microphones muted before capture and playback volume
+zero. The native helper is unchanged from 0.1.1.
 
-- 38 automated tests, including near-timeout answers, both Remote roles,
-  disconnect thread dispatch and stale disconnect callbacks.
-- Calls initiated from each side, capability negotiation, duplex synthetic
-  packets and hang-up through TLS to nvdaremote.com in a random private room.
-  No microphone audio was transmitted during this relay test.
-- The complete native duplex pipeline also passed through the public TLS
-  relay: real microphone capture and Opus encoding on both ends, relay delivery,
-  Opus decoding, and consumption by each WASAPI playback buffer. Microphones
-  were muted before capture started and playback volume was zero during this
-  check; it does not establish audible spoken-call quality.
-- Real wxPython from NVDA 2026.2: menu creation, incoming-call dialog, Answer
-  transition, microphone/speaker selection and teardown, with NVDA services
-  stubbed and windows hidden.
-- Local microphone/playback startup, mono Opus capture and shutdown under a
-  non-administrator account. Microphone packets were discarded in memory.
-- Helper codec self-test, device enumeration, process-loopback startup/shutdown,
-  executable manifest/dependency inspection and Python compilation.
+This remains a preview. Audible simultaneous music and conversation between two
+physical NVDA computers have not been verified. Calls require Windows x64 and
+NVDA 2025.1 or newer; computer audio excluding NVDA requires Windows build 20348
+or newer. Install the same version on both ends.
 
-This remains a **preview**: interactive spoken calls between two NVDA
-computers are not yet verified. Install the same version on both ends. Calls
-require Windows x64 and NVDA 2025.1 or newer; computer audio excluding NVDA
-requires Windows build 20348 or newer. Use headphones; echo cancellation is
-not included. Everyone sharing the Remote key and the relay operator must be
-trusted. Some relays may filter custom messages.
-
-The packaged add-on and `SHA256SUMS.txt` are attached.
+The packaged add-on, SHA256SUMS.txt and Opus license are attached.

@@ -103,10 +103,28 @@ def main():
         try:
             plugin.incoming_call()
             assert plugin.call_dialog is not None
-            plugin.start_audio = lambda kind, ready, packet, error: ready()
+            plugin.start_audio = lambda kind, ready, packet, error, stream="call": ready()
             plugin.engine.answer()
             assert plugin.call_dialog is None
             assert plugin.engine.state == "waiting_call"
+            # Both streams can be active without disabling microphone controls.
+            plugin.engine.call.state = "call"
+            plugin.engine.audio.state = "audio"
+            plugin.engine.simultaneous = True
+            plugin.changed()
+            assert plugin.items["mute"][0].IsEnabled()
+            assert plugin.items["stop"][0].IsEnabled()
+            # A disconnect resets helpers/state, and a fresh same-transport
+            # handshake restores the real wx menu even with stale Remote IDs.
+            plugin._connection_ended()
+            assert not plugin.items["stop"][0].IsEnabled()
+            client = SimpleNamespace(leaderSession=session, followerSession=None,
+                registerLocalScript=lambda script: None, unregisterLocalScript=lambda script: None)
+            sys.modules["_remoteClient"]._remoteClient = client
+            session.followers[3] = {}
+            plugin._membership(transport, dict(type="channel_joined", clients=[dict(id=3, connection_type="slave")]))
+            plugin.engine.receive(dict(protocol=1, action="hello", instance="f"*32, simultaneous=True), 3)
+            assert plugin.items["call"][0].IsEnabled()
             plugin._show_settings({"input": [("default", "Default microphone"), ("selected-mic", "Selected microphone")],
                 "output": [("default", "Default speakers"), ("selected-output", "Selected speakers")]})
             assert plugin.settings["input"] == "selected-mic"

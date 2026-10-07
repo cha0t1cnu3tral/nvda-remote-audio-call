@@ -9,6 +9,7 @@ from pathlib import Path
 import select
 import socket
 import ssl
+import threading
 import sys
 import time
 import uuid
@@ -58,18 +59,22 @@ def main():
             plugin.closed = plugin.locked = False
             plugin.transport = plugin.session = plugin.native = None
             plugin.old_parse = plugin.hooked_parse = plugin.pair = plugin.menu = plugin.call_dialog = None
+            plugin.audio_native = None
+            plugin.members = None
+            plugin.connection_epoch = 0
+            plugin.connection_live = threading.Event()
             plugin.engine = AdapterTests.plugin_module.Engine(plugin)
             plugin.incoming_call = Mock()
             plugin.play = Mock()
-            plugin.start_audio = lambda kind, ready, packet, error: ready()
+            plugin.start_audio = lambda kind, ready, packet, error, stream="call": ready()
             if args.native_helper:
                 plugin.settings = dict(input="default", output="default", volume=0)
-                def start_audio(kind, ready, packet, error, current=plugin):
+                def start_audio(kind, ready, packet, error, current=plugin, stream="call"):
                     current.stop_audio()
                     current.native = AdapterTests.plugin_module.NativeAudio(kind, current.settings,
                         ready, packet, error, lambda function, *values: function(*values), initial_muted=True)
                 plugin.start_audio = start_audio
-                plugin.play = Mock(side_effect=lambda packet, current=plugin: current.native.play(packet))
+                plugin.play = Mock(side_effect=lambda packet, current=plugin, stream="call": current.native.play(packet))
             plugin.supports_system_audio = lambda: True
             transport = Transport()
             session = SimpleNamespace(transport=transport, leaders={} if index == 0 else {identities[index]: {}}, followers={identities[index]: {}} if index == 0 else set())
@@ -111,13 +116,25 @@ def main():
                     plugin.engine._packet(plugin.engine.token, b"synthetic-" + bytes([index]))
                 pump(lambda: all(p.play.called for p in plugins))
                 for index, plugin in enumerate(plugins):
-                    plugin.play.assert_called_once_with(b"synthetic-" + bytes([1-index]))
+                    plugin.play.assert_called_once_with(b"synthetic-" + bytes([1-index]), stream="call")
+                plugins[1].engine.start_system_audio()
+                pump(lambda: all(p.engine.audio.state == "audio" for p in plugins))
+                assert all(p.engine.call.state == "call" for p in plugins)
+                for plugin in plugins:
+                    plugin.play.reset_mock()
+                plugins[0].engine.call._packet(plugins[0].engine.call.token, b"controller voice")
+                plugins[1].engine.call._packet(plugins[1].engine.call.token, b"controlled voice")
+                plugins[1].engine.audio._packet(plugins[1].engine.audio.token, b"computer sound")
+                pump(lambda: plugins[0].play.call_count == 2 and plugins[1].play.call_count == 1)
+                plugins[0].play.assert_any_call(b"controlled voice", stream="call")
+                plugins[0].play.assert_any_call(b"computer sound", stream="audio")
+                plugins[1].play.assert_called_once_with(b"controller voice", stream="call")
             plugins[caller].engine.stop()
             pump(lambda: all(p.engine.state == "idle" for p in plugins))
         if args.native_helper:
             print("TLS relay calls and native audio pipeline passed in both directions; microphones muted before capture, playback volume zero")
         else:
-            print("TLS relay negotiation, calls in both directions, duplex synthetic frames and hang-up passed; no microphone opened")
+            print("TLS relay negotiation, calls in both directions, simultaneous voice/computer-audio synthetic frames and hang-up passed; no microphone opened")
     finally:
         for plugin in plugins:
             plugin._detach()

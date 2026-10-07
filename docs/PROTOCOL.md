@@ -6,7 +6,11 @@ supplies `origin`. Outgoing messages include a target peer ID; v1 is restricted
 to two participants, so receipt is gated by the unique expected origin.
 
 `hello` / `hello_ack` negotiate protocol capability, process-instance nonce,
-and system-audio availability. A changed instance cancels existing streams.
+system-audio availability, and `simultaneous: true` for independent streams.
+A changed instance cancels both existing streams. Each message includes
+`stream: "call"` or `stream: "audio"`; helpers, tokens and sequence counters are
+independent. Untagged older-peer messages are routed by audio action/token.
+Concurrent streams require both peers to advertise simultaneous support.
 Only the opposite-role peer in a two-client session is accepted.
 
 Call flow: `call_offer` → user Answer → callee helper ready → `call_accept` →
@@ -20,7 +24,7 @@ invitations converge on the lexicographically smaller invitation token.
 
 Audio flow: controlled user starts → `audio_offer` → controller helper ready →
 `audio_ready` → controlled helper ready → `audio_started`. Frames then travel
-only from controlled to controller. Only one stream is active at a time.
+only from controlled to controller. Calls and computer audio have independent sessions and can run concurrently.
 
 Every stream uses a random 32-character token. `frame` carries this token,
 a monotonically increasing sequence, and base64 Opus data. Frames with an
@@ -48,3 +52,12 @@ Closing/killing the child tears down audio devices. No audio files, listening
 sockets, elevated process, or persistent service exist.
 Capture and playback workers check the active input desktop at least every
 50 ms and stop on a secure or unavailable desktop, including UAC transitions.
+
+Disconnect events stop both helpers immediately on the network thread, then
+reset session/UI state on the UI thread. Handlers bind their source transport
+and connection epoch so delayed callbacks cannot reset a newer connection.
+The adapter keeps the parser attached while Remote reconnects, and replaces
+its participant snapshot from `channel_joined`, then tracks `client_joined` /
+`client_left`. Stale IDs in Remote session collections do not block the menus.
+Reconnection restores controls after capability negotiation; it does not
+reopen microphones or resume computer audio without a new user action.

@@ -1,6 +1,6 @@
 # Remote Audio and Call for NVDA
 
-Two separate audio modes for NVDA's built-in Remote Access. Install the same
+Voice calls and computer audio sharing for NVDA's built-in Remote Access. Install the same
 add-on on both computers. No administrator access, audio driver, service,
 additional server, or separate Python installation is required.
 
@@ -9,7 +9,7 @@ replace a two-computer test with NVDA; see [validation](docs/VALIDATION.md).
 
 ## Install
 
-Download `remoteAudioCall-0.1.1.nvda-addon` from
+Download `remoteAudioCall-0.1.2.nvda-addon` from
 [Releases](https://github.com/cha0t1cnu3tral/nvda-remote-audio-call/releases).
 Open the file, confirm installation in NVDA, and restart NVDA. Install it on
 both computers. Use a user-writable NVDA configuration or a portable NVDA copy
@@ -51,7 +51,7 @@ incoming-call window also has a **Microphone and speakers** button.
    to end the call.
 
 Unanswered calls time out after 30 seconds. Use headphones: this version does
-not provide acoustic echo cancellation. Computer audio is off during calls.
+not provide acoustic echo cancellation. Computer audio can play during calls.
 
 ## Audio mode
 
@@ -61,9 +61,11 @@ computer's applications. NVDA's own process and child speech processes are
 excluded; normal Remote speech continues independently. Capture covers
 applications across output devices, not just one selected speaker.
 
-Either person can stop the stream. Starting a call ends computer audio;
-starting computer audio ends a call. Modes never mix, and stopped modes never
-resume automatically. Audio is not recorded to files.
+Computer audio and a voice call can run together. Start sharing on the controlled
+computer before or during a call; answering or declining a call leaves the shared
+audio running. Microphone mute affects only your voice. **Stop audio or hang up**
+stops both streams. Both computers need version 0.1.2 or newer for simultaneous
+audio. Audio is not recorded to files.
 
 NVDA speech rendered by an external application outside NVDA's process tree
 cannot be identified automatically and may be included. Protected media and
@@ -79,8 +81,10 @@ initially. Settings live in `remoteAudioCall.json` in your NVDA configuration.
 Optional keyboard shortcuts can be assigned in **Preferences → Input gestures →
 Remote Audio and Call**. Default shortcuts are not assigned.
 
-Audio stops when the connection ends, either computer locks, the helper fails,
-or NVDA exits. Unlocking/reconnecting requires starting the mode again. Secure
+Both streams reset when the connection ends, either computer locks, or NVDA
+exits. Reconnecting refreshes the available controls automatically; start a new
+call or audio share when ready. A helper failure stops its own stream while the
+other stream continues. Unlocking requires starting audio again. Secure
 desktops, login screens, and elevation prompts do not carry audio.
 
 ## Troubleshooting
@@ -114,7 +118,7 @@ cmake --build build --config Release --parallel
 python scripts/package.py --helper build/Release/remoteAudioHelper.exe
 ```
 
-Output: `dist/remoteAudioCall-0.1.1.nvda-addon` and `dist/SHA256SUMS.txt`.
+Output: `dist/remoteAudioCall-0.1.2.nvda-addon` and `dist/SHA256SUMS.txt`.
 GitHub Actions builds the same archive on each push. Opus 1.6.1 is downloaded
 with a pinned SHA-256 and linked statically, along with the C++ runtime. The
 helper uses an `asInvoker` manifest and communicates through anonymous pipes.

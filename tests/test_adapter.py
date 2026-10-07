@@ -63,6 +63,10 @@ class AdapterTests(unittest.TestCase):
         self.plugin.transport = self.plugin.session = self.plugin.native = None
         self.plugin.old_parse = self.plugin.hooked_parse = self.plugin.pair = None
         self.plugin.menu = None
+        self.plugin.audio_native = None
+        self.plugin.members = None
+        self.plugin.connection_epoch = 0
+        self.plugin.connection_live = threading.Event()
         self.plugin.engine = module.Engine(self.plugin)
         self.plugin.call_dialog = None
         self.plugin.incoming_call = Mock()
@@ -161,3 +165,99 @@ class AdapterTests(unittest.TestCase):
         self.assertFalse(self.plugin.allowed())
         self.plugin.send(dict(action="frame", protocol=1, token="f"*32))
         self.assertTrue(self.transport.queue.empty())
+
+    def remote_client(self):
+        client = SimpleNamespace(leaderSession=self.session, followerSession=None,
+            registerLocalScript=Mock(), unregisterLocalScript=Mock())
+        self.plugin.remote_client = client
+        self.plugin.last_hello = 0
+        return patch.dict(sys.modules, {"_remoteClient": SimpleNamespace(_remoteClient=client)})
+
+    def test_reconnect_on_same_transport_discards_stale_participants(self):
+        self.plugin.engine.state = "call"
+        self.plugin.native = Mock()
+        old_helper = self.plugin.native
+        self.plugin.audio_native = Mock()
+        old_audio = self.plugin.audio_native
+        self.transport.connected = False
+        self.plugin._connection_ended(transport=self.transport)
+        self.assertEqual(self.plugin.engine.state, "idle")
+        old_helper.stop.assert_called_once()
+        old_audio.stop.assert_called_once()
+        # NVDA's collections still contain the previous ID after reconnecting.
+        self.session.followers[3] = {}
+        self.transport.connected = True
+        with self.remote_client():
+            raw = json.dumps(dict(type="channel_joined", clients=[dict(id=3, connection_type="slave")])).encode()
+            self.transport.parse(raw)
+        self.assertEqual(self.transport.parsed[-1], raw)
+        self.assertEqual(self.plugin.engine.peer, 3)
+        self.plugin._control(self.transport, dict(protocol=1, action="hello", instance="a"*32, simultaneous=True), 3)
+        self.assertTrue(self.plugin.engine.available)
+
+    def test_network_disconnect_stops_devices_before_ui_callback(self):
+        self.plugin.native = Mock()
+        self.plugin.audio_native = Mock()
+        helpers = self.plugin.native, self.plugin.audio_native
+        pending = []
+        with patch.object(self.plugin_module.wx, "CallAfter", side_effect=lambda *args: pending.append(args)):
+            worker = threading.Thread(target=self.plugin._connection_ended)
+            worker.start()
+            worker.join(timeout=2)
+        for helper in helpers:
+            helper.stop.assert_called_once()
+        self.assertFalse(self.plugin.allowed())
+        self.assertIsNone(self.plugin.native)
+        self.assertIsNone(self.plugin.audio_native)
+        callback, *args = pending[0]
+        callback(*args)
+        self.assertIsNone(self.plugin.engine.peer)
+
+    def test_delayed_disconnect_cannot_cancel_rejoined_same_transport(self):
+        epoch = self.plugin.connection_epoch
+        self.plugin._connection_ended()
+        with self.remote_client():
+            self.plugin._membership(self.transport, dict(type="channel_joined", clients=[dict(id=2, connection_type="slave")]))
+        self.plugin._finish_connection_ended(self.transport, epoch)
+        self.assertEqual(self.plugin.engine.peer, 2)
+
+    def test_old_event_handler_cannot_disconnect_new_transport(self):
+        callback = next(iter(self.transport.transportDisconnected.handlers))
+        new_transport = Transport()
+        self.plugin._attach(new_transport, self.session)
+        self.plugin.engine.connect("controlling", 2)
+        callback()
+        self.assertEqual(self.plugin.engine.peer, 2)
+        self.assertTrue(self.plugin.connection_live.is_set())
+
+    def test_membership_changes_stop_audio_and_reenable_call_controls(self):
+        self.plugin.menu = Mock()
+        self.plugin.items = {name: (Mock(), None) for name in ("call", "audio", "answer", "decline", "stop", "mute")}
+        self.plugin.pair = ("controlling", 2)
+        self.plugin.engine.state = "call"
+        with self.remote_client(), patch.object(self.plugin_module, "HELPER", SimpleNamespace(is_file=lambda: True)):
+            self.plugin._membership(self.transport, dict(type="channel_joined", clients=[dict(id=2, connection_type="slave"), dict(id=3, connection_type="master")]))
+            self.assertIsNone(self.plugin.engine.peer)
+            self.plugin.items["call"][0].Enable.assert_called_with(False)
+            self.plugin._membership(self.transport, dict(type="client_left", client=dict(id=3)))
+            self.plugin._control(self.transport, dict(protocol=1, action="hello", instance="a"*32, simultaneous=True), 2)
+            self.plugin.items["call"][0].Enable.assert_called_with(True)
+
+    def test_concurrent_helpers_start_play_and_stop_independently(self):
+        self.plugin.settings = dict(input="default", output="default", volume=100)
+        call_helper, audio_helper = Mock(), Mock()
+        with patch.object(self.plugin_module, "NativeAudio", side_effect=[call_helper, audio_helper]):
+            self.plugin.start_audio("call", Mock(), Mock(), Mock(), stream="call")
+            self.plugin.start_audio("receive", Mock(), Mock(), Mock(), stream="audio")
+        call_helper.stop.assert_not_called()
+        self.plugin.play(b"voice", stream="call")
+        self.plugin.play(b"stereo", stream="audio")
+        call_helper.play.assert_called_once_with(b"voice")
+        audio_helper.play.assert_called_once_with(b"stereo")
+        self.plugin.mute(True)
+        call_helper.mute.assert_called_once_with(True)
+        audio_helper.mute.assert_not_called()
+        self.plugin.stop_audio(stream="audio")
+        self.assertIs(self.plugin.native, call_helper)
+        call_helper.stop.assert_not_called()
+        audio_helper.stop.assert_called_once()

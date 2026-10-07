@@ -13,7 +13,8 @@ Before treating this preview as stable, perform these checks on two computers:
   mute/unmute, and hang up. Verify no microphone audio before acceptance.
 - Share sound from the controlled side. Play music and speak with NVDA:
   music reaches the controller and NVDA is excluded from the audio stream.
-- Switch Call → Audio and Audio → Call without mixed streams.
+- Start computer audio before and during a call; verify both remain audible.
+  Microphone mute must leave computer audio playing; Stop must end both.
 - Stop listening from the controller and restart only from the controlled side.
 - Disconnect, reconnect, lock/unlock, close NVDA, unplug microphones/playback,
   and forcibly stop the helper. Audio must stop and never resume automatically.
@@ -25,6 +26,24 @@ Before treating this preview as stable, perform these checks on two computers:
 
 The automated tests are not evidence that these interactive two-computer checks
 passed. See GitHub release notes for the checks actually completed for a build.
+
+## 0.1.2 checks completed
+
+- 50 automated tests cover independent concurrent streams, failure isolation,
+  immediate device shutdown, same-transport reconnects, stale participant IDs,
+  stale event callbacks, and restored menu availability.
+- Actual NVDA 2026.2 wxPython checks pass simultaneous-stream menu state and
+  recovery after reconnecting with stale participant IDs, with NVDA services
+  stubbed and windows hidden.
+- Public TLS relay checks pass simultaneous synthetic voice and stereo audio
+  packets, calls from both sides, and stopping both streams. No microphone is
+  opened in this check.
+- The unchanged native helper passes its mono/stereo codec self-test, device
+  enumeration, and executable manifest/dependency inspection.
+- Native duplex calls also pass through the public TLS relay in both call
+  directions, with microphones muted from startup and playback volume zero.
+- Audible simultaneous music and conversation on two physical NVDA computers
+  remain to be verified.
 
 ## 0.1.1 call checks completed
 

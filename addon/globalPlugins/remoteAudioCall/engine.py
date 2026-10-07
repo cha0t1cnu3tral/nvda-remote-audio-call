@@ -19,7 +19,7 @@ def synchronized(method):
     return wrapped
 
 
-class Engine:
+class StreamEngine:
     def __init__(self, backend, clock=time.monotonic):
         self._lock = threading.RLock()
         self.backend = backend
@@ -54,11 +54,12 @@ class Engine:
         self.role = self.peer = self.peer_instance = None
         self.capable = False
         self.peer_system_audio = False
+        self.backend.changed()
 
     @synchronized
     def hello(self):
         if self.peer is not None:
-            self.send("hello", instance=self.instance, system_audio=self.backend.supports_system_audio())
+            self.send("hello", instance=self.instance, system_audio=self.backend.supports_system_audio(), simultaneous=True)
 
     @synchronized
     def send(self, action, **payload):
@@ -211,7 +212,7 @@ class Engine:
             self.capable = True
             self.peer_system_audio = message.get("system_audio") is True
             if action == "hello":
-                self.send("hello_ack", instance=self.instance, system_audio=self.backend.supports_system_audio())
+                self.send("hello_ack", instance=self.instance, system_audio=self.backend.supports_system_audio(), simultaneous=True)
             self.backend.changed()
             return
         if not self.available:
@@ -295,3 +296,124 @@ class Engine:
             outgoing_call = self.state == "outgoing_call"
             self.stop(announce=False)
             self.backend.notify("Call unanswered" if outgoing_call else "Audio or call request timed out")
+
+
+class StreamBackend:
+    """Give each stream its own helper and tag its messages on the wire."""
+    def __init__(self, backend, stream):
+        self.backend, self.stream = backend, stream
+
+    def __getattr__(self, name):
+        return getattr(self.backend, name)
+
+    def send(self, payload):
+        self.backend.send(dict(payload, stream=self.stream))
+
+    def start_audio(self, kind, ready, packet, error):
+        self.backend.start_audio(kind, ready, packet, error, stream=self.stream)
+
+    def stop_audio(self):
+        self.backend.stop_audio(stream=self.stream)
+
+    def play(self, packet):
+        self.backend.play(packet, stream=self.stream)
+
+
+class Engine:
+    """Independent voice and computer-audio sessions over one Remote connection."""
+    def __init__(self, backend, clock=time.monotonic):
+        self.backend = backend
+        self.call = StreamEngine(StreamBackend(backend, "call"), clock)
+        self.audio = StreamEngine(StreamBackend(backend, "audio"), clock)
+        self.audio.instance = self.call.instance
+        self.simultaneous = False
+
+    def __getattr__(self, name):
+        return getattr(self.call, name)
+
+    @property
+    def state(self):
+        return self.call.state if self.call.state != "idle" else self.audio.state
+
+    @state.setter
+    def state(self, value):
+        self.call.state = value
+
+    @property
+    def token(self):
+        return self.call.token if self.call.state != "idle" else self.audio.token
+
+    @token.setter
+    def token(self, value):
+        self.call.token = value
+
+    @property
+    def capable(self):
+        return self.call.capable
+
+    @capable.setter
+    def capable(self, value):
+        self.call.capable = self.audio.capable = value
+
+    def connect(self, role, peer):
+        self.disconnect()
+        self.call.role = self.audio.role = role
+        self.call.peer = self.audio.peer = peer
+        self.hello()
+
+    def disconnect(self):
+        self.call.disconnect()
+        self.audio.disconnect()
+        self.simultaneous = False
+
+    def stop(self, send=True, announce=True):
+        active = self.state != "idle"
+        self.call.stop(send=send, announce=False)
+        self.audio.stop(send=send, announce=False)
+        if active and announce:
+            self.backend.notify("Audio and call stopped")
+
+    def start_call(self):
+        if self.audio.state != "idle" and not self.simultaneous:
+            self.audio.stop(announce=False)
+        self.call.start_call()
+
+    def start_system_audio(self):
+        if self.call.state != "idle" and not self.simultaneous:
+            self.backend.notify("Install version 0.1.2 or newer on both computers to share computer audio during a call")
+            return
+        self.audio.start_system_audio()
+
+    def receive(self, message, origin):
+        if not isinstance(message, dict):
+            return
+        if origin != self.call.peer or message.get("protocol") != PROTOCOL:
+            return
+        action = message.get("action")
+        if action in ("hello", "hello_ack"):
+            instance = message.get("instance")
+            if not isinstance(instance, str) or len(instance) != 32:
+                return
+            # A single handshake establishes capability for both streams.
+            self.call.receive(message, origin)
+            self.audio.receive(dict(message, action="hello_ack"), origin)
+            self.simultaneous = message.get("simultaneous") is True
+            return
+        stream = self._stream(message)
+        if action == "call_offer" and self.audio.state != "idle" and not self.simultaneous:
+            self.audio.stop(announce=False)
+        stream.receive(message, origin)
+
+    def _stream(self, message):
+        if message.get("stream") == "audio" or str(message.get("action", "")).startswith("audio_"):
+            return self.audio
+        if message.get("stream") is None and self.audio.token is not None and message.get("token") == self.audio.token:
+            return self.audio
+        return self.call
+
+    def receive_frame(self, message, origin):
+        self._stream(message).receive_frame(message, origin)
+
+    def tick(self):
+        self.call.tick()
+        self.audio.tick()

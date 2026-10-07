@@ -22,6 +22,8 @@ class Backend:
         self.auto_ready = True
         self.invitations = 0
         self.stops = 0
+        self.stream_packets = {"call": [], "audio": []}
+        self.stream_stops = {"call": 0, "audio": 0}
 
     def allowed(self): return self.permitted
     def supports_system_audio(self): return self.supported
@@ -29,12 +31,16 @@ class Backend:
     def changed(self): pass
     def notify(self, data): self.notifications.append(data)
     def incoming_call(self): self.invitations += 1
-    def stop_audio(self): self.stops += 1
-    def start_audio(self, kind, ready, packet, error):
+    def stop_audio(self, stream="call"):
+        self.stops += 1
+        self.stream_stops[stream] += 1
+    def start_audio(self, kind, ready, packet, error, stream="call"):
         self.helpers.append((kind, ready, packet, error))
         self.pending_ready = ready
         if self.auto_ready: ready()
-    def play(self, packet): self.played.append(packet)
+    def play(self, packet, stream="call"):
+        self.played.append(packet)
+        self.stream_packets[stream].append(packet)
     def mute(self, muted): self.mutes.append(muted)
 
 
@@ -70,7 +76,7 @@ class SessionTests(unittest.TestCase):
     def audio(self):
         self.controlled.start_system_audio()
         self.flush()
-        self.assertEqual((self.controller.state, self.controlled.state), ("audio", "audio"))
+        self.assertEqual((self.controller.audio.state, self.controlled.audio.state), ("audio", "audio"))
 
     def test_capability_handshake(self):
         self.assertTrue(self.controller.available)
@@ -154,22 +160,86 @@ class SessionTests(unittest.TestCase):
         self.assertFalse(self.b.helpers)
         self.assertEqual(self.controlled.state, "idle")
 
-    def test_audio_then_call_stops_system_stream(self):
+    def test_audio_then_call_preserves_system_stream(self):
         self.audio()
         stops = self.b.stops
         self.controller.start_call()
         self.flush()
-        self.assertGreater(self.b.stops, stops)
+        self.assertEqual(self.b.stops, stops + 1)
+        self.assertEqual(self.controlled.audio.state, "audio")
         self.assertEqual(self.controlled.state, "incoming_call")
         self.controlled.answer()
         self.flush()
         self.assertEqual(self.controller.state, "call")
 
-    def test_call_then_audio_disables_microphones(self):
+    def test_call_then_audio_preserves_microphones(self):
         self.call()
         self.audio()
         self.assertEqual(self.b.helpers[-1][0], "send")
         self.assertEqual(self.a.helpers[-1][0], "receive")
+        self.assertEqual(self.controller.call.state, "call")
+        self.assertEqual(self.controlled.call.state, "call")
+
+    def test_concurrent_voice_and_stereo_packets_use_separate_helpers(self):
+        self.call()
+        self.audio()
+        self.a.helpers[0][2](b"controller voice")
+        self.b.helpers[0][2](b"controlled voice")
+        self.b.helpers[1][2](b"computer audio")
+        self.flush()
+        self.assertEqual(self.a.stream_packets, {"call": [b"controlled voice"], "audio": [b"computer audio"]})
+        self.assertEqual(self.b.stream_packets, {"call": [b"controller voice"], "audio": []})
+        self.controller.toggle_mute()
+        self.assertTrue(self.controller.muted)
+        self.assertEqual(self.controller.audio.state, "audio")
+
+    def test_audio_survives_call_decline_and_call_helper_failure(self):
+        self.audio()
+        self.controller.start_call()
+        self.flush()
+        self.controlled.decline()
+        self.flush()
+        self.assertEqual((self.controller.audio.state, self.controlled.audio.state), ("audio", "audio"))
+        self.call()
+        self.b.helpers[-1][3]("microphone disconnected")
+        self.flush()
+        self.assertEqual((self.controller.call.state, self.controlled.call.state), ("idle", "idle"))
+        self.assertEqual((self.controller.audio.state, self.controlled.audio.state), ("audio", "audio"))
+
+    def test_call_survives_audio_helper_failure(self):
+        self.call()
+        self.audio()
+        self.b.helpers[-1][3]("loopback stopped")
+        self.flush()
+        self.assertEqual((self.controller.call.state, self.controlled.call.state), ("call", "call"))
+        self.assertEqual((self.controller.audio.state, self.controlled.audio.state), ("idle", "idle"))
+
+    def test_stop_and_disconnect_clear_both_streams(self):
+        self.call()
+        self.audio()
+        self.controller.stop()
+        self.flush()
+        for engine in (self.controller, self.controlled):
+            self.assertEqual((engine.call.state, engine.audio.state), ("idle", "idle"))
+        self.call()
+        self.audio()
+        self.controller.disconnect()
+        self.assertEqual((self.controller.call.state, self.controller.audio.state), ("idle", "idle"))
+        self.assertFalse(self.controller.available)
+
+    def test_old_peer_cannot_start_concurrent_streams(self):
+        self.call()
+        self.controlled.simultaneous = False
+        self.controlled.start_system_audio()
+        self.flush()
+        self.assertEqual(self.controlled.call.state, "call")
+        self.assertEqual(self.controlled.audio.state, "idle")
+
+    def test_peer_restart_clears_both_streams(self):
+        self.call()
+        self.audio()
+        self.controller.receive(dict(protocol=1, action="hello", instance="f"*32, system_audio=True, simultaneous=True), 2)
+        self.assertEqual((self.controller.call.state, self.controller.audio.state), ("idle", "idle"))
 
     def test_hangup_and_controller_stop_audio(self):
         self.call()

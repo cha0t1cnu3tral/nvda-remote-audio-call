@@ -38,6 +38,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         self.closed = False
         self.locked = isLockScreenModeActive()
         self.transport = self.session = self.native = None
+        self.audio_native = None
+        self.members = None
+        self.connection_epoch = 0
+        self.connection_live = threading.Event()
         self.old_parse = self.hooked_parse = None
         self.pair = None
         self.remote_client = None
@@ -92,7 +96,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             return False
         if not self.transport or not self.transport.connected or not self.session:
             return False
-        return len(self.session.leaders) + len(self.session.followers) == 1
+        if not self.connection_live.is_set():
+            return False
+        leaders, followers = self._participants()
+        count = len(self.members) if self.members is not None else len(leaders) + len(followers)
+        return count == 1 and len(leaders) + len(followers) == 1
+
+    def _participants(self):
+        members = self.members
+        if members is not None:
+            return ({peer for peer, role in members.items() if role == "master"},
+                    {peer for peer, role in members.items() if role == "slave"})
+        return self.session.leaders, self.session.followers
 
     def supports_system_audio(self):
         return sys.getwindowsversion().build >= 20348 and HELPER.is_file()
@@ -105,12 +120,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if not self.menu or self.closed:
             return
         ready = self.engine.available and HELPER.is_file()
-        state = self.engine.state
-        self.items["call"][0].Enable(ready and state in ("idle", "audio"))
-        self.items["audio"][0].Enable(ready and self.engine.role == "controlled" and self.supports_system_audio() and state in ("idle", "call"))
+        state = self.engine.call.state
+        self.items["call"][0].Enable(ready and state == "idle")
+        self.items["audio"][0].Enable(ready and self.engine.role == "controlled" and self.supports_system_audio() and self.engine.audio.state == "idle" and (state == "idle" or self.engine.simultaneous))
         for name in ("answer", "decline"):
             self.items[name][0].Enable(ready and state == "incoming_call")
-        self.items["stop"][0].Enable(state != "idle")
+        self.items["stop"][0].Enable(self.engine.state != "idle")
         self.items["mute"][0].Enable(state == "call")
         self.items["mute"][0].Check(self.engine.muted)
         if self.call_dialog and state != "incoming_call":
@@ -151,20 +166,23 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             tones.beep(660, 120)
             wx.CallLater(2500, self._ring, token)
 
-    def start_audio(self, kind, ready, packet, error):
-        self.stop_audio()
+    def start_audio(self, kind, ready, packet, error, stream="call"):
+        self.stop_audio(stream=stream)
         try:
-            self.native = NativeAudio(kind, self.settings.copy(), ready, packet, error, wx.CallAfter)
+            native = NativeAudio(kind, self.settings.copy(), ready, packet, error, wx.CallAfter)
+            setattr(self, "audio_native" if stream == "audio" else "native", native)
         except (OSError, ValueError) as exc:
             wx.CallAfter(error, str(exc))
 
-    def stop_audio(self):
-        native, self.native = self.native, None
+    def stop_audio(self, stream="call"):
+        attribute = "audio_native" if stream == "audio" else "native"
+        native = getattr(self, attribute, None)
+        setattr(self, attribute, None)
         if native:
             native.stop()
 
-    def play(self, packet):
-        native = self.native
+    def play(self, packet, stream="call"):
+        native = self.audio_native if stream == "audio" else self.native
         if native:
             native.play(packet)
 
@@ -187,6 +205,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     def _attach(self, transport, session):
         self._detach()
         self.transport, self.session = transport, session
+        self.connection_live.set()
         self.old_parse = transport.parse
         old_parse = self.old_parse
         def parse(line):
@@ -196,6 +215,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                 data = json.loads(line)
             except (ValueError, UnicodeError):
                 return old_parse(line)
+            if isinstance(data, dict) and data.get("type") in ("channel_joined", "client_joined", "client_left"):
+                wx.CallAfter(self._membership, transport, data)
             if not isinstance(data, dict) or data.get("type") != MESSAGE:
                 return old_parse(line)
             if len(line) > 4096 or self.transport is not transport:
@@ -207,27 +228,66 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                 wx.CallAfter(self._control, transport, data, origin)
         self.hooked_parse = parse
         transport.parse = parse
-        transport.transportDisconnected.register(self._connection_ended)
-        transport.transportClosing.register(self._connection_ended)
+        # Bind the source transport, rather than looking up a potentially newer one.
+        self.disconnect_handler = lambda **kwargs: self._connection_ended(transport=transport)
+        transport.transportDisconnected.register(self.disconnect_handler)
+        transport.transportClosing.register(self.disconnect_handler)
+
+    def _membership(self, transport, data):
+        if self.transport is not transport:
+            return
+        if data["type"] == "channel_joined":
+            self.connection_epoch += 1
+            self.engine.disconnect()
+            self.pair = None
+            self.members = {client["id"]: client.get("connection_type") for client in data.get("clients", [])}
+            self.connection_live.set()
+        else:
+            if self.members is None:
+                leaders, followers = self._participants()
+                members = dict.fromkeys(leaders, "master")
+                members.update(dict.fromkeys(followers, "slave"))
+            else:
+                members = self.members.copy()
+            client = data.get("client") or {}
+            peer = client.get("id")
+            if data["type"] == "client_left":
+                members.pop(peer, None)
+            elif peer is not None:
+                members[peer] = client.get("connection_type")
+            # Reader-thread permission checks see an immutable snapshot.
+            self.members = members
+        # Stop old helpers and refresh controls as soon as membership changes.
+        self._tick()
 
     def _control(self, transport, data, origin):
         if self.transport is transport:
             self.engine.receive(data, origin)
 
-    def _connection_ended(self, **kwargs):
+    def _connection_ended(self, transport=None, **kwargs):
         # Remote invokes disconnect handlers on its network thread. wx menus
         # and the incoming-call dialog must only be touched on the UI thread.
-        transport = self.transport
-        if threading.current_thread() is not threading.main_thread():
-            wx.CallAfter(self._finish_connection_ended, transport)
-            return
-        self._finish_connection_ended(transport)
-
-    def _finish_connection_ended(self, transport):
+        transport = transport or self.transport
         if self.transport is not transport:
+            return
+        epoch = self.connection_epoch
+        self.connection_live.clear()
+        # Device teardown is thread-safe; stop capture/playback immediately even
+        # when NVDA's UI is busy and the state reset has to wait for CallAfter.
+        self.stop_audio(stream="call")
+        self.stop_audio(stream="audio")
+        if threading.current_thread() is not threading.main_thread():
+            wx.CallAfter(self._finish_connection_ended, transport, epoch)
+            return
+        self._finish_connection_ended(transport, epoch)
+
+    def _finish_connection_ended(self, transport, epoch=None):
+        if self.transport is not transport or (epoch is not None and epoch != self.connection_epoch):
             return
         self.engine.disconnect()
         self.pair = None
+        self.members = {}
+        self.changed()
 
     def _detach(self):
         self.engine.disconnect()
@@ -235,9 +295,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if transport:
             if transport.parse is self.hooked_parse:
                 transport.parse = self.old_parse
-            transport.transportDisconnected.unregister(self._connection_ended)
-            transport.transportClosing.unregister(self._connection_ended)
+            transport.transportDisconnected.unregister(self.disconnect_handler)
+            transport.transportClosing.unregister(self.disconnect_handler)
         self.transport = self.session = self.old_parse = self.hooked_parse = self.pair = None
+        self.members = None
+        self.connection_live.clear()
+        self.connection_epoch += 1
 
     def _tick(self, event=None):
         if self.closed:
@@ -252,11 +315,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             session = (client.leaderSession or client.followerSession) if client else None
             transport = session.transport if session else None
             if transport and transport.connected:
-                if transport is not self.transport:
+                if transport is not self.transport or session is not self.session:
                     self._attach(transport, session)
                 role = "controlling" if session is client.leaderSession else "controlled"
-                others = session.followers if role == "controlling" else session.leaders
-                wrong_role = session.leaders if role == "controlling" else session.followers
+                leaders, followers = self._participants()
+                others = followers if role == "controlling" else leaders
+                wrong_role = leaders if role == "controlling" else followers
                 peer = next(iter(others)) if len(others) == 1 and not wrong_role else None
                 pair = (role, peer) if peer is not None and self.allowed() else None
                 if pair != self.pair:
@@ -269,8 +333,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                 if pair and time.monotonic() - self.last_hello >= 2:
                     self.engine.hello()
                     self.last_hello = time.monotonic()
-            elif self.transport:
+            elif self.transport and transport is not self.transport:
                 self._detach()
+            elif self.transport and self.connection_live.is_set():
+                self._connection_ended(transport=self.transport)
             self.engine.tick()
             self.changed()
         except Exception:
@@ -295,7 +361,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if not HELPER.is_file():
             self.notify("Audio helper missing. Reinstall the packaged add-on")
         elif self.engine.peer is None:
-            count = len(self.session.leaders) + len(self.session.followers) if self.session else 0
+            leaders, followers = self._participants() if self.session else ((), ())
+            count = len(leaders) + len(followers)
             if count > 1:
                 self.notify("Off. More than one other computer is connected. Calls require exactly one controller and one controlled computer")
             else:
@@ -306,6 +373,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             state = STATUS[self.engine.state]
             if self.engine.state == "audio":
                 state = "Sharing computer audio" if self.engine.role == "controlled" else "Listening to computer audio"
+            elif self.engine.call.state == "call" and self.engine.audio.state == "audio":
+                state = "Call and computer audio"
             suffix = ". Microphone muted" if self.engine.muted else ""
             if self.engine.state == "call" and self.native:
                 captured, decoded, rendered, peak = self.native.stats
@@ -375,6 +444,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                     self.settings = updated
                     if self.native:
                         self.native.set_volume(updated["volume"])
+                    if self.audio_native:
+                        self.audio_native.set_volume(updated["volume"])
                     self.notify("Audio settings saved")
                 except OSError as exc:
                     self.notify("Cannot save audio settings: " + str(exc))
