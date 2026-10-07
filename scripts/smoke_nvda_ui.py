@@ -43,6 +43,7 @@ def main():
         def __init__(self):
             self.connected = True
             self.queue = queue.Queue()
+            self.transportConnected = Action()
             self.transportDisconnected = Action()
             self.transportClosing = Action()
         def parse(self, line): pass
@@ -58,7 +59,7 @@ def main():
         sys.modules["globalPluginHandler"].GlobalPlugin = BasePlugin
         sys.modules["globalVars"].appArgs = SimpleNamespace(configPath=temporary)
         sys.modules["gui"].mainFrame = frame
-        sys.modules["logHandler"].log = SimpleNamespace(exception=lambda text: (_ for _ in ()).throw(AssertionError(text)))
+        sys.modules["logHandler"].log = SimpleNamespace(info=lambda *args: None, exception=lambda text: (_ for _ in ()).throw(AssertionError(text)))
         sys.modules["scriptHandler"].script = lambda **kwargs: lambda function: function
         sys.modules["tones"].beep = lambda *args: None
         sys.modules["ui"].message = lambda text: None
@@ -74,13 +75,13 @@ def main():
         spec.loader.exec_module(module)
         plugin = module.GlobalPlugin()
         assert frame.toolsMenu.GetMenuItemCount() == 1
-        assert plugin.menu.GetMenuItemCount() == 9
-        assert not plugin.items["call"][0].IsEnabled()
+        assert plugin.menu.GetMenuItemCount() == 10
+        assert plugin.items["peer"][0].IsEnabled()
         transport = Transport()
         session = SimpleNamespace(leaders={}, followers={2: {}}, transport=transport)
-        plugin._attach(transport, session)
-        plugin.engine.connect("controlling", 2)
-        plugin.engine.capable = True
+        plugin._attach(transport, session, "controlling")
+        plugin.discovery_until = 0
+        plugin._control(transport, dict(protocol=2, action="hello", instance="a"*32, simultaneous=True), 2)
         # Menu availability is independent of hardware; pretend the helper exists.
         module.HELPER = SimpleNamespace(is_file=lambda: True)
         plugin.changed()
@@ -97,7 +98,7 @@ def main():
             def ShowModal(self):
                 for child in self.GetChildren():
                     if isinstance(child, wx.Choice):
-                        child.SetSelection(1)
+                        child.SetSelection(min(1, child.GetCount()-1))
                 return wx.ID_OK
         wx.Dialog = HiddenDialog
         try:
@@ -123,7 +124,19 @@ def main():
             sys.modules["_remoteClient"]._remoteClient = client
             session.followers[3] = {}
             plugin._membership(transport, dict(type="channel_joined", clients=[dict(id=3, connection_type="slave")]))
-            plugin.engine.receive(dict(protocol=1, action="hello", instance="f"*32, simultaneous=True), 3)
+            plugin._control(transport, dict(protocol=2, action="hello", instance="a"*32, simultaneous=True), 3)
+            assert plugin.engine.peer == 3
+            # Extra computers without the add-on leave all applicable actions usable.
+            plugin._membership(transport, dict(type="client_joined", client=dict(id=4, connection_type="master")))
+            assert plugin.engine.available
+            assert plugin.items["call"][0].IsEnabled()
+            assert plugin.items["peer"][0].IsEnabled()
+            assert plugin.items["settings"][0].IsEnabled()
+            # The real accessible chooser switches between two compatible peers.
+            plugin._membership(transport, dict(type="client_joined", client=dict(id=5, connection_type="slave")))
+            plugin._control(transport, dict(protocol=2, action="hello", instance="b"*32, simultaneous=True), 5)
+            assert plugin.on_choose_peer()
+            assert plugin.engine.peer == 5
             assert plugin.items["call"][0].IsEnabled()
             plugin._show_settings({"input": [("default", "Default microphone"), ("selected-mic", "Selected microphone")],
                 "output": [("default", "Default speakers"), ("selected-output", "Selected speakers")]})
@@ -137,7 +150,7 @@ def main():
         assert not lock_action.handlers
         assert not transport.transportClosing.handlers
         assert not transport.transportDisconnected.handlers
-        print("Real wx Tools menu, incoming-call dialog, Answer, microphone/speaker selection and teardown passed")
+        print("Real wx menus, incoming-call dialog, computer chooser, plain observer, reconnect, device settings and teardown passed")
     frame.Destroy()
     app.Destroy()
     sys.meta_path.remove(finder)

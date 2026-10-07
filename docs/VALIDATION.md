@@ -19,13 +19,34 @@ Before treating this preview as stable, perform these checks on two computers:
 - Disconnect, reconnect, lock/unlock, close NVDA, unplug microphones/playback,
   and forcibly stop the helper. Audio must stop and never resume automatically.
 - Test unavailable microphones and disabled Windows microphone privacy access.
-- Join a third participant: audio must stop.
+- Join/leave extra controllers and controlled computers, with and without the
+  add-on: audio must continue between the selected pair. Test choosing another
+  compatible peer, and verify only the addressed computer rings or plays audio.
 - Test slow networks while continuing keyboard control and normal Remote speech.
 - Run on a standard user account; confirm no UAC prompt, service, driver,
   firewall rule, or extra audio server is required.
 
 The automated tests are not evidence that these interactive two-computer checks
 passed. See GitHub release notes for the checks actually completed for a build.
+
+## 0.1.3 checks completed
+
+- 68 automated tests cover compatible-peer selection, extra computers without
+  the add-on, incompatible peers, addressed controls/frames, failure isolation,
+  stale callback generations, reconnects, menu availability and packaging.
+- Actual NVDA 2026.2 wxPython checks pass the remote-computer chooser, incoming
+  dialog, applicable menu controls with a plain extra controller, selected-peer
+  reconnect, audio-device settings and teardown. NVDA services are stubbed,
+  windows hidden, and the installed user profile is untouched.
+- Three-participant public TLS relay checks pass with a plain observer and an
+  add-on observer: addressed simultaneous synthetic voice/computer audio,
+  busy responses, selected-peer reconnect with a new Remote ID, and calls in
+  both directions. No microphone or loopback capture is opened by these checks.
+- Native duplex relay calls, codec self-test, device enumeration and executable
+  checks pass with the existing release helper. Relay microphone capture is
+  muted from startup and playback volume is zero.
+- Audible simultaneous music and conversation on two physical NVDA computers
+  remain to be verified.
 
 ## 0.1.2 checks completed
 

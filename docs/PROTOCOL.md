@@ -1,23 +1,38 @@
 # Protocol and lifecycle
 
-Extension message type: `remote_audio_call_v1`. Messages travel as newline
-JSON on the existing Remote transport and use protocol version 1. The relay
-supplies `origin`. Outgoing messages include a target peer ID; v1 is restricted
-to two participants, so receipt is gated by the unique expected origin.
+Extension message type: `remote_audio_call_v2`, protocol version 2, introduced
+in 0.1.3. Messages travel as newline JSON on the existing Remote transport.
+Both audio endpoints must upgrade; v1 peers are not audio candidates.
+
+Discovery broadcasts `hello` independently of selection. Opposite-role peers
+are identified from relay membership and advertise their process instance,
+system-audio capability and simultaneous-stream capability. `hello_ack` is
+addressed with `target_instance`. A two-second initial discovery window avoids
+selecting the first responder when multiple compatible peers are present.
+
+Session messages carry `target` (Remote client ID) and `target_instance`
+(recipient process nonce). Every recipient checks its own instance before
+acting; selected relay origin, stream token and sequence checks also apply.
+Relays may broadcast extension packets: addressing prevents unintended
+ringing/playback but does not encrypt audio against other channel members.
+Additional participants, including those without the add-on, do not invalidate
+the selected pair. Ordinary Remote messages always reach NVDA's parser.
 
 `hello` / `hello_ack` negotiate protocol capability, process-instance nonce,
 system-audio availability, and `simultaneous: true` for independent streams.
 A changed instance cancels both existing streams. Each message includes
 `stream: "call"` or `stream: "audio"`; helpers, tokens and sequence counters are
-independent. Untagged older-peer messages are routed by audio action/token.
+independent. Audio actions/tokens also identify their stream.
 Concurrent streams require both peers to advertise simultaneous support.
-Only the opposite-role peer in a two-client session is accepted.
+Only the selected opposite-role peer can exchange media. While idle, an
+addressed invitation from another discovered peer selects that sender before
+normal invitation handling. Other senders receive a decline while either
+stream is active. Malformed or misaddressed invitations cannot change selection.
 
 Call flow: `call_offer` → user Answer → callee helper ready → `call_accept` →
 caller helper ready → `call_ready`. Both sides can then exchange frames.
 Answer immediately sends `call_answering` to give the caller a fresh 15-second
 device-startup timeout, even when the invitation is answered near 30 seconds.
-Older peers ignore this optional message; install 0.1.1 on both ends for the fix.
 Invitations time out at 30 seconds; device setup at 15 seconds. Simultaneous
 invitations converge on the lexicographically smaller invitation token.
 `decline` or `stop` ends the matching stream.
@@ -55,9 +70,15 @@ Capture and playback workers check the active input desktop at least every
 
 Disconnect events stop both helpers immediately on the network thread, then
 reset session/UI state on the UI thread. Handlers bind their source transport
-and connection epoch so delayed callbacks cannot reset a newer connection.
+and connection epoch, advanced on network connection/disconnection events.
+Membership and control callbacks carry the epoch captured at parse time, so
+delayed callbacks cannot reset or modify a newer connection.
 The adapter keeps the parser attached while Remote reconnects, and replaces
 its participant snapshot from `channel_joined`, then tracks `client_joined` /
 `client_left`. Stale IDs in Remote session collections do not block the menus.
-Reconnection restores controls after capability negotiation; it does not
+Monitoring attaches as soon as a Remote session exists, before connection
+completion. Selection remembers the process instance across reconnects of
+that session, including a new Remote ID. Ending/replacing the Remote session
+clears the preference. No different peer is silently substituted when the
+selected one leaves. Reconnection restores controls after discovery; it does not
 reopen microphones or resume computer audio without a new user action.

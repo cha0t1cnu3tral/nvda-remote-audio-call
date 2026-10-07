@@ -1,28 +1,39 @@
-# Remote Audio and Call 0.1.2: reconnect and simultaneous audio fixes
+# Remote Audio and Call 0.1.3: usable controls with extra Remote computers
 
-Install **remoteAudioCall-0.1.2.nvda-addon** on both computers and restart NVDA.
+Install **remoteAudioCall-0.1.3.nvda-addon** on the two computers exchanging
+voice or shared audio, then restart NVDA. Extra computers sharing the Remote
+channel do not need this add-on.
 
-- Voice calls and shared computer audio now run together. Starting or answering
-  a call preserves computer audio; starting audio during a call preserves the
-  call. Microphone mute affects only voice. Stop audio or hang up stops both.
-- A disconnect immediately closes both audio helpers and resets their sessions.
-  After Remote reconnects, capability negotiation restores available controls.
-  Start a new call or audio share after reconnecting.
-- Fresh relay membership replaces stale participant IDs, fixing controls that
-  could remain unavailable after reconnecting. Delayed disconnect events cannot
-  reset a newer connection, including a reconnect using the same transport.
-- A voice or computer-audio helper failure stops only the affected stream.
+- Extra controllers/controlled computers no longer disable the selected pair,
+  including computers without the add-on. Ordinary Remote features continue.
+- The sole compatible opposite-role computer is selected after a short discovery
+  period. With multiple compatible peers, use **Choose remote computer...**.
+  The accessible chooser lists role and Remote client ID; switching stops audio.
+- Calls and audio packets are addressed to the intended recipient. Other add-on
+  computers do not ring or play them. Audio still travels through the existing
+  Remote relay; broadcast relays and everyone sharing the key remain trusted.
+- Start call stays usable without a connection and explains what is missing.
+  Settings, status, device selection and computer selection remain accessible.
+  Report status identifies the selected computer or the availability reason.
+- Selected-peer disconnects reset both streams; reconnects rediscover the same
+  running add-on even with a new Remote ID. Stale connection, membership and
+  invitation callbacks cannot reset or modify the new connection. Start audio
+  again after reconnecting; microphones do not reopen automatically.
+- Simultaneous voice and computer audio, independent failure cleanup and
+  microphone mute are preserved.
 
-Validation: 50 automated tests; real NVDA 2026.2 wxPython menu/dialog checks
-with NVDA services stubbed; simultaneous synthetic voice/computer-audio frames
-through a public TLS relay; native mono/stereo codec self-test, device enumeration
-and executable inspection. Native duplex calls also passed through the relay
-in both directions, with microphones muted before capture and playback volume
-zero. The native helper is unchanged from 0.1.1.
+This release uses Remote extension protocol v2. Both audio endpoints need
+0.1.3 or newer; versions 0.1.0 through 0.1.2 cannot exchange audio with it.
+Extra computers without a compatible add-on are excluded from audio discovery.
 
-This remains a preview. Audible simultaneous music and conversation between two
-physical NVDA computers have not been verified. Calls require Windows x64 and
-NVDA 2025.1 or newer; computer audio excluding NVDA requires Windows build 20348
-or newer. Install the same version on both ends.
+Validation: 68 automated tests; real NVDA 2026.2 wxPython menu, chooser and
+reconnect checks with NVDA services stubbed; three-participant public TLS
+relay checks with both plain and add-on observers, simultaneous synthetic
+streams, busy responses and selected-peer reconnect; native duplex relay
+calls muted from startup with playback volume zero; native codec, device and
+executable checks. The native helper is unchanged from 0.1.2.
 
-The packaged add-on, SHA256SUMS.txt and Opus license are attached.
+This remains a preview: audible music and conversation between two physical
+NVDA computers have not been verified. Windows x64 and NVDA 2025.1 or newer
+are required; computer audio excluding NVDA requires Windows build 20348 or
+newer. The add-on package, SHA256SUMS.txt and Opus license are attached.

@@ -9,7 +9,7 @@ replace a two-computer test with NVDA; see [validation](docs/VALIDATION.md).
 
 ## Install
 
-Download `remoteAudioCall-0.1.2.nvda-addon` from
+Download `remoteAudioCall-0.1.3.nvda-addon` from
 [Releases](https://github.com/cha0t1cnu3tral/nvda-remote-audio-call/releases).
 Open the file, confirm installation in NVDA, and restart NVDA. Install it on
 both computers. Use a user-writable NVDA configuration or a portable NVDA copy
@@ -28,9 +28,22 @@ Connect normally using **NVDA → Tools → Remote Access → Connect**. Choose
 **Control another machine** on one computer and **Allow this machine to be
 controlled** on the other. Both use the same server and key.
 
-This preview supports exactly two computers: one controller and one controlled
-computer. Additional participants stop audio. Everyone sharing a Remote key
-must be trusted: the relay carries audio within that existing Remote channel.
+Calls and computer audio use one selected controller/controlled pair. Extra
+computers can remain connected, including computers without this add-on. They
+do not disable the selected pair or become audio candidates. Both audio
+endpoints must install 0.1.3 or newer; earlier releases use a different protocol.
+
+After a short discovery period, the sole compatible opposite-role computer is
+selected automatically. With multiple compatible computers, choose **Tools >
+Remote Audio and Call > Choose remote computer**. The accessible list shows
+the Remote client ID and role. Selecting a different computer stops current
+audio. Selection lasts for this Remote session. An addressed incoming call
+can select its caller while idle; invitations from others are declined while
+audio is active.
+
+Everyone sharing a Remote key must be trusted: the relay carries audio within
+that existing Remote channel. Recipient checks prevent unintended playback or
+ringing in the add-on; a broadcast relay can still deliver packets to observers.
 TLS protects the connection to the relay; this is not end-to-end encryption
 against the relay operator. Some relay servers may filter extension messages;
 both ends must support forwarding custom protocol messages.
@@ -64,7 +77,7 @@ applications across output devices, not just one selected speaker.
 Computer audio and a voice call can run together. Start sharing on the controlled
 computer before or during a call; answering or declining a call leaves the shared
 audio running. Microphone mute affects only your voice. **Stop audio or hang up**
-stops both streams. Both computers need version 0.1.2 or newer for simultaneous
+stops both streams. Both computers need version 0.1.3 or newer for simultaneous
 audio. Audio is not recorded to files.
 
 NVDA speech rendered by an external application outside NVDA's process tree
@@ -89,8 +102,11 @@ desktops, login screens, and elevation prompts do not carry audio.
 
 ## Troubleshooting
 
-- **Controls unavailable:** connect exactly one computer in each role, install
-  the add-on on both, and wait a few seconds for capability negotiation.
+- **Starting a call or audio share:** connect through Remote Access and use
+  **Choose remote computer** if several audio partners are available. Extra
+  computers without the add-on do not block audio. **Report status** gives
+  the selected client ID or explains why no compatible peer is available.
+  Start call remains usable when disconnected and explains the missing connection.
 - **Waiting for the other add-on:** check both installations and whether the
   relay forwards custom messages.
 - **Microphone error:** check Windows desktop-app microphone permissions and
@@ -118,7 +134,7 @@ cmake --build build --config Release --parallel
 python scripts/package.py --helper build/Release/remoteAudioHelper.exe
 ```
 
-Output: `dist/remoteAudioCall-0.1.2.nvda-addon` and `dist/SHA256SUMS.txt`.
+Output: `dist/remoteAudioCall-0.1.3.nvda-addon` and `dist/SHA256SUMS.txt`.
 GitHub Actions builds the same archive on each push. Opus 1.6.1 is downloaded
 with a pinned SHA-256 and linked statically, along with the C++ runtime. The
 helper uses an `asInvoker` manifest and communicates through anonymous pipes.

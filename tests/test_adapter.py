@@ -21,6 +21,7 @@ class Transport:
         self.connected = True
         self.queue = queue.Queue()
         self.parsed = []
+        self.transportConnected = Action()
         self.transportDisconnected = Action()
         self.transportClosing = Action()
     def parse(self, line): self.parsed.append(line)
@@ -64,18 +65,16 @@ class AdapterTests(unittest.TestCase):
         self.plugin.old_parse = self.plugin.hooked_parse = self.plugin.pair = None
         self.plugin.menu = None
         self.plugin.audio_native = None
-        self.plugin.members = None
-        self.plugin.connection_epoch = 0
-        self.plugin.connection_live = threading.Event()
+        self.plugin._init_connection_state()
         self.plugin.engine = module.Engine(self.plugin)
         self.plugin.call_dialog = None
         self.plugin.incoming_call = Mock()
         self.plugin.supports_system_audio = lambda: True
         self.transport = Transport()
         self.session = SimpleNamespace(leaders={}, followers={2: {}}, transport=self.transport)
-        self.plugin._attach(self.transport, self.session)
-        self.plugin.engine.connect("controlling", 2)
-        self.plugin.engine.capable = True
+        self.plugin._attach(self.transport, self.session, "controlling")
+        self.plugin.discovery_until = 0
+        self.plugin._control(self.transport, dict(action="hello", protocol=2, instance="a"*32, simultaneous=True, system_audio=True), 2)
         while not self.transport.queue.empty(): self.transport.queue.get()
 
     def tearDown(self): self.plugin._detach()
@@ -87,23 +86,23 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(self.transport.parsed[-1], raw)
 
     def test_custom_call_message_does_not_reach_remote_enum_parser(self):
-        raw = json.dumps(dict(type=self.plugin_module.MESSAGE, action="call_offer", protocol=1, token="f"*32, origin=2)).encode()
+        raw = json.dumps(dict(type=self.plugin_module.MESSAGE, action="call_offer", protocol=2, token="f"*32, target_instance=self.plugin.engine.instance, origin=2)).encode()
         self.transport.parse(raw)
         self.assertFalse(self.transport.parsed)
         self.assertEqual(self.plugin.engine.state, "incoming_call")
         self.plugin.incoming_call.assert_called_once()
 
     def test_untrusted_origin_cannot_ring(self):
-        raw = json.dumps(dict(type=self.plugin_module.MESSAGE, action="call_offer", protocol=1, token="f"*32, origin=99)).encode()
+        raw = json.dumps(dict(type=self.plugin_module.MESSAGE, action="call_offer", protocol=2, token="f"*32, target_instance=self.plugin.engine.instance, origin=99)).encode()
         self.transport.parse(raw)
         self.assertEqual(self.plugin.engine.state, "idle")
         self.plugin.incoming_call.assert_not_called()
 
     def test_backpressure_drops_media_without_dropping_stop(self):
         for _ in range(6): self.transport.queue.put(b"key message")
-        self.plugin.send(dict(action="frame", protocol=1, token="f"*32))
+        self.plugin.send(dict(action="frame", protocol=2, token="f"*32))
         self.assertEqual(self.transport.queue.qsize(), 6)
-        self.plugin.send(dict(action="stop", protocol=1, token="f"*32))
+        self.plugin.send(dict(action="stop", protocol=2, token="f"*32))
         self.assertEqual(self.transport.queue.qsize(), 7)
 
     def test_lock_sends_stop_and_closes_helper(self):
@@ -155,16 +154,18 @@ class AdapterTests(unittest.TestCase):
             self.plugin.remote_client = None
             with patch.dict(sys.modules, {"_remoteClient": SimpleNamespace(_remoteClient=client)}):
                 self.plugin._tick()
+            self.plugin._control(self.transport, dict(action="hello", protocol=2, instance="a"*32, simultaneous=True), 2)
+            self.plugin.select_peer(2, announce=False)
             self.assertEqual(self.plugin.engine.role, role)
             self.assertEqual(self.plugin.engine.peer, 2)
             client.registerLocalScript.assert_called()
 
-    def test_third_participant_disables_stream_immediately(self):
+    def test_third_participant_does_not_disable_selected_stream(self):
         self.assertTrue(self.plugin.allowed())
         self.session.followers[3] = {}
-        self.assertFalse(self.plugin.allowed())
-        self.plugin.send(dict(action="frame", protocol=1, token="f"*32))
-        self.assertTrue(self.transport.queue.empty())
+        self.assertTrue(self.plugin.allowed())
+        self.plugin.send(dict(action="frame", protocol=2, token="f"*32))
+        self.assertFalse(self.transport.queue.empty())
 
     def remote_client(self):
         client = SimpleNamespace(leaderSession=self.session, followerSession=None,
@@ -191,8 +192,9 @@ class AdapterTests(unittest.TestCase):
             raw = json.dumps(dict(type="channel_joined", clients=[dict(id=3, connection_type="slave")])).encode()
             self.transport.parse(raw)
         self.assertEqual(self.transport.parsed[-1], raw)
-        self.assertEqual(self.plugin.engine.peer, 3)
-        self.plugin._control(self.transport, dict(protocol=1, action="hello", instance="a"*32, simultaneous=True), 3)
+        self.assertIsNone(self.plugin.engine.peer)
+        self.plugin._control(self.transport, dict(protocol=2, action="hello", instance="a"*32, simultaneous=True), 3)
+        self.plugin.select_peer(3)
         self.assertTrue(self.plugin.engine.available)
 
     def test_network_disconnect_stops_devices_before_ui_callback(self):
@@ -214,10 +216,12 @@ class AdapterTests(unittest.TestCase):
         self.assertIsNone(self.plugin.engine.peer)
 
     def test_delayed_disconnect_cannot_cancel_rejoined_same_transport(self):
-        epoch = self.plugin.connection_epoch
         self.plugin._connection_ended()
+        epoch = self.plugin.connection_epoch
+        self.plugin._connection_started(self.transport)
         with self.remote_client():
             self.plugin._membership(self.transport, dict(type="channel_joined", clients=[dict(id=2, connection_type="slave")]))
+        self.plugin._control(self.transport, dict(action="hello", protocol=2, instance="a"*32, simultaneous=True), 2)
         self.plugin._finish_connection_ended(self.transport, epoch)
         self.assertEqual(self.plugin.engine.peer, 2)
 
@@ -232,15 +236,14 @@ class AdapterTests(unittest.TestCase):
 
     def test_membership_changes_stop_audio_and_reenable_call_controls(self):
         self.plugin.menu = Mock()
-        self.plugin.items = {name: (Mock(), None) for name in ("call", "audio", "answer", "decline", "stop", "mute")}
-        self.plugin.pair = ("controlling", 2)
+        self.plugin.items = {name: (Mock(), None) for name in ("call", "audio", "answer", "decline", "stop", "mute", "devices", "settings", "status", "peer")}
         self.plugin.engine.state = "call"
         with self.remote_client(), patch.object(self.plugin_module, "HELPER", SimpleNamespace(is_file=lambda: True)):
             self.plugin._membership(self.transport, dict(type="channel_joined", clients=[dict(id=2, connection_type="slave"), dict(id=3, connection_type="master")]))
             self.assertIsNone(self.plugin.engine.peer)
-            self.plugin.items["call"][0].Enable.assert_called_with(False)
+            self.plugin.items["call"][0].Enable.assert_called_with(True)
             self.plugin._membership(self.transport, dict(type="client_left", client=dict(id=3)))
-            self.plugin._control(self.transport, dict(protocol=1, action="hello", instance="a"*32, simultaneous=True), 2)
+            self.plugin._control(self.transport, dict(protocol=2, action="hello", instance="a"*32, simultaneous=True), 2)
             self.plugin.items["call"][0].Enable.assert_called_with(True)
 
     def test_concurrent_helpers_start_play_and_stop_independently(self):
@@ -261,3 +264,202 @@ class AdapterTests(unittest.TestCase):
         self.assertIs(self.plugin.native, call_helper)
         call_helper.stop.assert_not_called()
         audio_helper.stop.assert_called_once()
+
+    def hello(self, peer, instance=None):
+        self.plugin._control(self.transport, dict(action="hello", protocol=2,
+            instance=instance or str(peer)*32, simultaneous=True, system_audio=True), peer)
+
+    def offer(self, peer, **changes):
+        message = dict(action="call_offer", protocol=2, token="f"*32,
+            target_instance=self.plugin.engine.instance, stream="call")
+        message.update(changes)
+        self.plugin._control(self.transport, message, peer)
+
+    def menu(self):
+        self.plugin.menu = Mock()
+        self.plugin.items = {name: (Mock(), None) for name in
+            ("call", "audio", "answer", "decline", "stop", "mute", "devices", "settings", "status", "peer")}
+
+    def test_plain_extra_controller_and_controlled_computer_do_not_disable_buttons(self):
+        self.menu()
+        self.plugin.engine.state = "call"
+        helper = self.plugin.native = Mock()
+        with patch.object(self.plugin_module, "HELPER", SimpleNamespace(is_file=lambda: True)):
+            for role in ("master", "slave"):
+                self.plugin._membership(self.transport, dict(type="client_joined", client=dict(id=3, connection_type=role)))
+                self.assertTrue(self.plugin.engine.available)
+                self.assertEqual(self.plugin._candidates(), [2])
+                self.assertEqual(self.plugin.engine.peer, 2)
+                self.plugin.items["mute"][0].Enable.assert_called_with(True)
+                self.plugin.items["status"][0].Enable.assert_called_with(True)
+                self.plugin._membership(self.transport, dict(type="client_left", client=dict(id=3)))
+        helper.stop.assert_not_called()
+
+    def test_plain_peer_keyboard_and_speech_still_reach_nvda(self):
+        self.plugin._membership(self.transport, dict(type="client_joined", client=dict(id=3, connection_type="master")))
+        for kind in ("key", "speak", "set_clipboard_text", "tone"):
+            message = json.dumps(dict(type=kind, origin=3, data="ordinary")).encode()
+            self.transport.parse(message)
+            self.assertEqual(self.transport.parsed[-1], message)
+        self.assertTrue(self.plugin.engine.available)
+
+    def test_incompatible_addon_never_becomes_an_audio_candidate(self):
+        self.session.followers[3] = {}
+        self.plugin._control(self.transport, dict(action="hello", protocol=1, instance="3"*32), 3)
+        self.assertEqual(self.plugin._candidates(), [2])
+        self.assertTrue(self.plugin.engine.available)
+
+    def test_multiple_candidates_wait_for_explicit_selection(self):
+        self.plugin.engine.disconnect()
+        self.plugin.pair = None
+        self.plugin.preferred_instance = None
+        self.plugin.peers = {}
+        self.session.followers[3] = {}
+        self.plugin.discovery_until = float("inf")
+        self.hello(2)
+        self.hello(3)
+        self.plugin.discovery_until = 0
+        self.plugin._reconcile_peer()
+        self.assertEqual(self.plugin._candidates(), [2, 3])
+        self.assertIsNone(self.plugin.engine.peer)
+        self.assertTrue(self.plugin.select_peer(3))
+        self.assertEqual(self.plugin.engine.peer, 3)
+
+    def test_switching_peer_stops_both_streams_and_addresses_old_stop(self):
+        self.plugin.engine.call.state = "call"
+        self.plugin.engine.call.token = "c"*32
+        self.plugin.engine.audio.state = "audio"
+        self.plugin.engine.audio.token = "d"*32
+        old_helpers = self.plugin.native, self.plugin.audio_native = Mock(), Mock()
+        self.session.followers[3] = {}
+        self.hello(3)
+        self.assertTrue(self.plugin.select_peer(3))
+        for helper in old_helpers:
+            helper.stop.assert_called_once()
+        sent = []
+        while not self.transport.queue.empty():
+            sent.append(json.loads(self.transport.queue.get()))
+        stops = [message for message in sent if message["action"] == "stop"]
+        self.assertEqual(len(stops), 2)
+        self.assertTrue(all(message["target_instance"] == "a"*32 for message in stops))
+        self.assertEqual(self.plugin.engine.state, "idle")
+        self.assertEqual(self.plugin.engine.peer, 3)
+
+    def test_selected_peer_departure_resets_helpers_without_switching_to_observer(self):
+        self.plugin.engine.state = "call"
+        self.plugin.native = Mock()
+        helper = self.plugin.native
+        self.session.followers[3] = {}
+        self.hello(3)
+        self.plugin._membership(self.transport, dict(type="client_left", client=dict(id=2)))
+        helper.stop.assert_called_once()
+        self.assertIsNone(self.plugin.engine.peer)
+        self.assertEqual(self.plugin._candidates(), [3])
+
+    def test_reconnecting_selected_instance_with_new_remote_id_restores_controls(self):
+        self.plugin._connection_ended()
+        self.plugin._connection_started(self.transport)
+        self.plugin._membership(self.transport, dict(type="channel_joined", clients=[
+            dict(id=3, connection_type="slave"), dict(id=4, connection_type="master")]))
+        self.hello(3, instance="a"*32)
+        self.assertEqual(self.plugin.engine.peer, 3)
+        self.assertTrue(self.plugin.engine.available)
+        self.assertEqual(self.plugin.engine.state, "idle")
+
+    def test_stale_membership_and_control_callbacks_do_not_change_new_connection(self):
+        old_epoch = self.plugin.connection_epoch
+        self.plugin._connection_started(self.transport)
+        self.plugin._membership(self.transport, dict(type="channel_joined", clients=[dict(id=2, connection_type="slave")]))
+        self.hello(2, instance="a"*32)
+        self.plugin._membership(self.transport, dict(type="client_left", client=dict(id=2)), old_epoch)
+        self.plugin._control(self.transport, dict(action="call_offer", protocol=2, token="f"*32,
+            target_instance=self.plugin.engine.instance), 2, old_epoch)
+        self.assertTrue(self.plugin.engine.available)
+        self.assertEqual(self.plugin.engine.state, "idle")
+
+    def test_addressed_invitation_from_other_peer_selects_sender_when_idle(self):
+        self.session.followers[3] = {}
+        self.hello(3)
+        self.offer(3)
+        self.assertEqual(self.plugin.engine.peer, 3)
+        self.assertEqual(self.plugin.engine.state, "incoming_call")
+        self.plugin.incoming_call.assert_called_once()
+
+    def test_wrong_recipient_or_undiscovered_sender_cannot_ring_or_switch_peer(self):
+        self.session.followers[3] = {}
+        self.offer(3)
+        self.hello(3)
+        self.offer(3, target_instance="x"*32)
+        self.assertEqual(self.plugin.engine.peer, 2)
+        self.assertEqual(self.plugin.engine.state, "idle")
+        self.plugin.incoming_call.assert_not_called()
+
+    def test_other_peer_invitation_is_declined_while_current_pair_is_active(self):
+        self.plugin.engine.state = "call"
+        self.session.followers[3] = {}
+        self.hello(3)
+        self.offer(3)
+        self.assertEqual(self.plugin.engine.peer, 2)
+        self.assertEqual(self.plugin.engine.state, "call")
+        sent = []
+        while not self.transport.queue.empty():
+            sent.append(json.loads(self.transport.queue.get()))
+        declined = [message for message in sent if message["action"] == "decline"]
+        self.assertEqual(len(declined), 1)
+        self.assertEqual(declined[0]["target_instance"], "3"*32)
+
+    def test_tick_attaches_before_transport_connects_and_observes_rejoin(self):
+        self.plugin._detach()
+        self.transport.connected = False
+        with self.remote_client():
+            self.plugin._tick()
+        self.assertIs(self.plugin.transport, self.transport)
+        self.assertFalse(self.plugin.connection_live.is_set())
+        self.transport.connected = True
+        for callback in self.transport.transportConnected.handlers:
+            callback()
+        self.plugin._membership(self.transport, dict(type="channel_joined", clients=[dict(id=2, connection_type="slave")]))
+        self.hello(2, instance="a"*32)
+        self.plugin.select_peer(2, announce=False)
+        self.assertTrue(self.plugin.engine.available)
+
+    def test_start_without_peer_explains_connection_instead_of_silent_disabled_action(self):
+        self.plugin._detach()
+        self.menu()
+        with patch.object(self.plugin_module, "HELPER", SimpleNamespace(is_file=lambda: True)):
+            self.plugin.changed()
+            self.plugin.items["call"][0].Enable.assert_called_with(True)
+            for name in ("settings", "status", "peer", "devices"):
+                self.plugin.items[name][0].Enable.assert_called_with(True)
+            with patch.object(self.plugin, "notify") as notification:
+                self.plugin.start_action("call")
+                notification.assert_called_once_with("Connect through Remote Access first")
+
+    def test_controlled_side_keeps_selected_controller_when_plain_controller_joins(self):
+        self.session.leaders = {2: {}}
+        self.session.followers = {}
+        self.plugin._attach(self.transport, self.session, "controlled")
+        self.plugin.discovery_until = 0
+        self.hello(2, instance="a"*32)
+        self.plugin.engine.state = "call"
+        self.plugin._membership(self.transport, dict(type="client_joined", client=dict(id=3, connection_type="master")))
+        self.assertTrue(self.plugin.engine.available)
+        self.assertEqual(self.plugin.engine.peer, 2)
+        self.assertEqual(self.plugin.engine.state, "call")
+        self.assertEqual(self.plugin._candidates(), [2])
+
+    def test_malformed_invitation_cannot_change_selected_computer(self):
+        self.session.followers[3] = {}
+        self.hello(3)
+        self.offer(3, token="invalid")
+        self.assertEqual(self.plugin.engine.peer, 2)
+        self.assertEqual(self.plugin.engine.state, "idle")
+
+    def test_stop_remains_usable_if_helper_outlives_session_state(self):
+        self.menu()
+        helper = self.plugin.native = Mock()
+        self.plugin.changed()
+        self.plugin.items["stop"][0].Enable.assert_called_with(True)
+        self.plugin.engine.stop()
+        helper.stop.assert_called_once()
+        self.plugin.items["stop"][0].Enable.assert_called_with(False)

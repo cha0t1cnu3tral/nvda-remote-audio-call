@@ -6,8 +6,8 @@ import threading
 import time
 import uuid
 
-PROTOCOL = 1
-MESSAGE = "remote_audio_call_v1"
+PROTOCOL = 2
+MESSAGE = "remote_audio_call_v2"
 MAX_PACKET = 1275
 
 
@@ -64,6 +64,10 @@ class StreamEngine:
     @synchronized
     def send(self, action, **payload):
         if self.peer is not None:
+            if action not in ("hello", "hello_ack") and self.peer_instance is None:
+                return
+            if action != "hello":
+                payload["target_instance"] = self.peer_instance
             self.backend.send(dict(action=action, protocol=PROTOCOL, target=self.peer,
                                    token=self.token, **payload))
 
@@ -92,7 +96,7 @@ class StreamEngine:
 
     def _require_peer(self):
         if not self.available:
-            self.backend.notify("Connect one controlling and one controlled computer, both with Remote Audio and Call installed and unlocked")
+            self.backend.notify("Choose a connected opposite-role computer with Remote Audio and Call 0.1.3 or newer installed and unlocked")
             return False
         return True
 
@@ -202,6 +206,8 @@ class StreamEngine:
         if message.get("protocol") != PROTOCOL:
             return
         action = message.get("action")
+        if action != "hello" and message.get("target_instance") != self.instance:
+            return
         if action in ("hello", "hello_ack"):
             instance = message.get("instance")
             if not isinstance(instance, str) or len(instance) != 32:
@@ -224,10 +230,10 @@ class StreamEngine:
             if self.state == "outgoing_call":
                 # Simultaneous invitations converge on the smaller token.
                 if token >= self.token:
-                    self.backend.send(dict(action="decline", protocol=PROTOCOL, target=self.peer, token=token))
+                    self.backend.send(dict(action="decline", protocol=PROTOCOL, target=self.peer, target_instance=self.peer_instance, token=token))
                     return
             elif self.state not in ("idle", "audio"):
-                self.backend.send(dict(action="decline", protocol=PROTOCOL, target=self.peer, token=token))
+                self.backend.send(dict(action="decline", protocol=PROTOCOL, target=self.peer, target_instance=self.peer_instance, token=token))
                 return
             self.stop(announce=False)
             self._new("incoming_call", token, timeout=30)
@@ -235,7 +241,7 @@ class StreamEngine:
             return
         if action == "audio_offer":
             if self.role != "controlling" or not self.peer_system_audio or self.state != "idle":
-                self.backend.send(dict(action="decline", protocol=PROTOCOL, target=self.peer, token=token))
+                self.backend.send(dict(action="decline", protocol=PROTOCOL, target=self.peer, target_instance=self.peer_instance, token=token))
                 return
             self._new("preparing_receiver", token)
             self._start_helper("receive")
@@ -270,7 +276,7 @@ class StreamEngine:
     @synchronized
     def receive_frame(self, message, origin):
         # Network thread: decode only bounded packets, never queue work on the UI thread.
-        if origin != self.peer or not self.available or message.get("token") != self.token:
+        if origin != self.peer or not self.available or message.get("token") != self.token or message.get("target_instance") != self.instance:
             return
         if self.state != "call" and not (self.state == "audio" and self.role == "controlling"):
             return
@@ -355,10 +361,11 @@ class Engine:
     def capable(self, value):
         self.call.capable = self.audio.capable = value
 
-    def connect(self, role, peer):
+    def connect(self, role, peer, peer_instance=None):
         self.disconnect()
         self.call.role = self.audio.role = role
         self.call.peer = self.audio.peer = peer
+        self.call.peer_instance = self.audio.peer_instance = peer_instance
         self.hello()
 
     def disconnect(self):
@@ -380,7 +387,7 @@ class Engine:
 
     def start_system_audio(self):
         if self.call.state != "idle" and not self.simultaneous:
-            self.backend.notify("Install version 0.1.2 or newer on both computers to share computer audio during a call")
+            self.backend.notify("Install version 0.1.3 or newer on both computers to share computer audio during a call")
             return
         self.audio.start_system_audio()
 
@@ -390,13 +397,15 @@ class Engine:
         if origin != self.call.peer or message.get("protocol") != PROTOCOL:
             return
         action = message.get("action")
+        if action != "hello" and message.get("target_instance") != self.instance:
+            return
         if action in ("hello", "hello_ack"):
             instance = message.get("instance")
             if not isinstance(instance, str) or len(instance) != 32:
                 return
             # A single handshake establishes capability for both streams.
             self.call.receive(message, origin)
-            self.audio.receive(dict(message, action="hello_ack"), origin)
+            self.audio.receive(dict(message, action="hello_ack", target_instance=self.instance), origin)
             self.simultaneous = message.get("simultaneous") is True
             return
         stream = self._stream(message)

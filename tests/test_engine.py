@@ -238,7 +238,7 @@ class SessionTests(unittest.TestCase):
     def test_peer_restart_clears_both_streams(self):
         self.call()
         self.audio()
-        self.controller.receive(dict(protocol=1, action="hello", instance="f"*32, system_audio=True, simultaneous=True), 2)
+        self.controller.receive(dict(protocol=module.PROTOCOL, action="hello", instance="f"*32, system_audio=True, simultaneous=True), 2)
         self.assertEqual((self.controller.call.state, self.controller.audio.state), ("idle", "idle"))
 
     def test_hangup_and_controller_stop_audio(self):
@@ -276,7 +276,7 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(self.b.played[-1], b"voice1")
 
     def frame(self, **overrides):
-        return dict(protocol=1, token=self.controller.token, sequence=1,
+        return dict(protocol=module.PROTOCOL, token=self.controller.token, sequence=1, target_instance=self.controller.instance,
                     data=base64.b64encode(b"audio").decode(), **overrides)
 
     def test_reject_malformed_duplicate_stale_or_wrong_sender_frames(self):
@@ -284,7 +284,7 @@ class SessionTests(unittest.TestCase):
         valid = self.frame()
         self.controller.receive_frame(valid, 99)
         cases = [("data", "%%%"), ("data", "A" * 1701), ("sequence", True),
-                 ("sequence", -1), ("sequence", 2**53), ("protocol", 2),
+                 ("sequence", -1), ("sequence", 2**53), ("protocol", 1),
                  ("token", "x" * 32)]
         for key, value in cases:
             bad = dict(valid, **{key: value})
@@ -325,7 +325,7 @@ class SessionTests(unittest.TestCase):
 
     def test_peer_restart_cancels_active_stream(self):
         self.call()
-        self.controller.receive(dict(protocol=1, action="hello", instance="f"*32, system_audio=True), 2)
+        self.controller.receive(dict(protocol=module.PROTOCOL, action="hello", instance="f"*32, system_audio=True), 2)
         self.assertEqual(self.controller.state, "idle")
 
     def test_helper_setup_timeout(self):
@@ -339,9 +339,29 @@ class SessionTests(unittest.TestCase):
         self.assertEqual((self.controller.state, self.controlled.state), ("idle", "idle"))
 
     def test_unsupported_protocol_does_not_start_capture(self):
-        self.controlled.receive(dict(protocol=2, action="call_offer", token="f"*32), 1)
+        self.controlled.receive(dict(protocol=1, action="call_offer", token="f"*32, target_instance=self.controlled.instance), 1)
         self.assertEqual(self.controlled.state, "idle")
         self.assertFalse(self.b.helpers)
+
+    def test_control_messages_for_other_instance_do_not_ring_or_stop(self):
+        self.controlled.receive(dict(protocol=module.PROTOCOL, action="call_offer", token="f"*32,
+            target_instance="x"*32), 1)
+        self.assertEqual(self.b.invitations, 0)
+        self.call()
+        self.controller.receive(dict(protocol=module.PROTOCOL, action="stop", token=self.controller.token,
+            target_instance="x"*32), 2)
+        self.assertEqual(self.controller.state, "call")
+
+    def test_frames_require_correct_recipient_even_with_matching_token_and_origin(self):
+        self.call()
+        packet = self.frame()
+        self.controller.receive_frame(dict(packet, target_instance="x"*32), 2)
+        unaddressed = packet.copy()
+        del unaddressed["target_instance"]
+        self.controller.receive_frame(unaddressed, 2)
+        self.assertFalse(self.a.played)
+        self.controller.receive_frame(packet, 2)
+        self.assertEqual(self.a.played, [b"audio"])
 
 
 if __name__ == "__main__":

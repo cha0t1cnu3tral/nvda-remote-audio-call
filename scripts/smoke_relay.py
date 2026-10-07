@@ -60,9 +60,7 @@ def main():
             plugin.transport = plugin.session = plugin.native = None
             plugin.old_parse = plugin.hooked_parse = plugin.pair = plugin.menu = plugin.call_dialog = None
             plugin.audio_native = None
-            plugin.members = None
-            plugin.connection_epoch = 0
-            plugin.connection_live = threading.Event()
+            plugin._init_connection_state()
             plugin.engine = AdapterTests.plugin_module.Engine(plugin)
             plugin.incoming_call = Mock()
             plugin.play = Mock()
@@ -78,13 +76,15 @@ def main():
             plugin.supports_system_audio = lambda: True
             transport = Transport()
             session = SimpleNamespace(transport=transport, leaders={} if index == 0 else {identities[index]: {}}, followers={identities[index]: {}} if index == 0 else set())
-            plugin._attach(transport, session)
-            plugin.engine.connect(role, identities[index])
+            plugin._attach(transport, session, role)
+            plugin._discover()
             plugins.append(plugin)
 
         def pump(until):
             limit = time.monotonic() + 10
             while time.monotonic() < limit:
+                for plugin in plugins:
+                    plugin._reconcile_peer()
                 for connection, plugin in zip(sockets, plugins):
                     while not plugin.transport.queue.empty():
                         connection.sendall(plugin.transport.queue.get())
