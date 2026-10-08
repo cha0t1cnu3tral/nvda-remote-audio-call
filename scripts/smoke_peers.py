@@ -58,6 +58,7 @@ def main():
             for connection, plugin in zip(connections, plugins):
                 if plugin:
                     plugin._reconcile_peer()
+                    plugin.engine.tick()
                     if time.monotonic() - plugin.last_hello >= 2:
                         plugin._discover()
                         plugin.last_hello = time.monotonic()
@@ -132,6 +133,8 @@ def main():
         assert all(plugin.engine.call.state == "call" and plugin.engine.audio.state == "audio" and plugin.engine.available for plugin in plugins[:2])
         # Lose the selected controller's network connection during both streams,
         # then reconnect the same plugin/transport with a newly allocated ID.
+        call_token = plugins[0].engine.call.token
+        plugins[0].engine.toggle_mute()
         old_id = plugins[1].engine.peer
         old_connection = connections[0]
         plugins[0].transport.connected = False
@@ -144,11 +147,22 @@ def main():
         for callback in list(plugins[0].transport.transportConnected.handlers):
             callback()
         pump(lambda: all(plugin.engine.available for plugin in plugins[:2]) and plugins[1].engine.peer != old_id)
-        assert all(plugin.engine.state == "idle" for plugin in plugins[:2])
+        pump(lambda: all(plugin.engine.call.state == "call" for plugin in plugins[:2]))
+        assert all(plugin.engine.call.token == call_token and plugin.engine.audio.state == "idle" for plugin in plugins[:2])
+        assert plugins[0].engine.muted
+        for plugin in plugins[:2]:
+            plugin.play.reset_mock()
+        plugins[0].engine.call._packet(call_token, b"recovered controller voice")
+        plugins[1].engine.call._packet(call_token, b"recovered controlled voice")
+        pump(lambda: all(plugin.play.called for plugin in plugins[:2]))
+        plugins[0].play.assert_called_once_with(b"recovered controlled voice", stream="call")
+        plugins[1].play.assert_called_once_with(b"recovered controller voice", stream="call")
+        plugins[0].engine.stop()
+        pump(lambda: all(plugin.engine.state == "idle" for plugin in plugins[:2]))
         call(caller=1)
         plugins[1].engine.stop()
         pump(lambda: all(plugin.engine.state == "idle" for plugin in plugins[:2]))
-        print("Three-participant TLS relay passed: " + args.observer + " observer join/leave, addressed simultaneous audio, selected-peer reconnect and calls in both directions; no capture opened")
+        print("Three-participant TLS relay passed: " + args.observer + " observer join/leave, addressed simultaneous audio, automatic call recovery with mute and duplex frames, and calls in both directions; no capture opened")
     finally:
         for plugin in plugins:
             if plugin:

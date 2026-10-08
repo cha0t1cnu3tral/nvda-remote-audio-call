@@ -9,7 +9,7 @@ replace a two-computer test with NVDA; see [validation](docs/VALIDATION.md).
 
 ## Install
 
-Download `remoteAudioCall-0.1.3.nvda-addon` from
+Download `remoteAudioCall-0.1.4.nvda-addon` from
 [Releases](https://github.com/cha0t1cnu3tral/nvda-remote-audio-call/releases).
 Open the file, confirm installation in NVDA, and restart NVDA. Install it on
 both computers. Use a user-writable NVDA configuration or a portable NVDA copy
@@ -94,11 +94,21 @@ initially. Settings live in `remoteAudioCall.json` in your NVDA configuration.
 Optional keyboard shortcuts can be assigned in **Preferences → Input gestures →
 Remote Audio and Call**. Default shortcuts are not assigned.
 
-Both streams reset when the connection ends, either computer locks, or NVDA
-exits. Reconnecting refreshes the available controls automatically; start a new
-call or audio share when ready. A helper failure stops its own stream while the
-other stream continues. Unlocking requires starting audio again. Secure
-desktops, login screens, and elevation prompts do not carry audio.
+With 0.1.4 on both computers, an answered call can recover automatically after
+a brief Remote Access outage. Capture and playback stop immediately while
+disconnected. The add-on waits up to 30 seconds for the same computer and the
+same running add-on instance to reconnect, then confirms that both sides still
+have the accepted call before restarting audio. Microphone mute is preserved.
+**Stop audio or hang up** also cancels pending recovery. Report status explains
+whether the call is reconnecting or recovering its audio.
+
+An audio-helper failure during an established call triggers up to three restart
+attempts, with delays of one, two, and four seconds. Repeated failures end the
+call with an explanation. Computer audio is independent and continues through
+a local call-helper failure; restart computer audio sharing after a network outage.
+Locking either computer, changing peers, ending the Remote session, restarting
+NVDA, or exceeding the recovery window requires a new call. Secure desktops,
+login screens, and elevation prompts do not carry audio.
 
 ## Troubleshooting
 
@@ -115,7 +125,13 @@ desktops, login screens, and elevation prompts do not carry audio.
   both computers and restart the call. **Report status** distinguishes missing
   microphone frames, no received audio, and playback that has not started.
   The Windows communications default can differ from your usual sound device.
-- **Device unplugged:** the stream stops. Select an available device and restart.
+- **Device unplugged:** an established call attempts to restart its audio helper.
+  Reconnect the device promptly. If recovery fails, select an available device
+  and start a new call. Mute remains in effect during recovery.
+- **Connection drops:** keep Remote Access connected and allow its reconnection
+  to finish. With 0.1.4 on both ends, the accepted call recovers within the
+  30-second window. Longer outages require a new call. A sole compatible peer
+  is selected directly when you start a call; multiple peers still show a chooser.
 - **Sound delayed:** the existing Remote TCP connection carries audio. Poor
   networks can delay it; queues are bounded to avoid growing backlogs. This
   preview is not a replacement for a dedicated voice service.
@@ -134,7 +150,7 @@ cmake --build build --config Release --parallel
 python scripts/package.py --helper build/Release/remoteAudioHelper.exe
 ```
 
-Output: `dist/remoteAudioCall-0.1.3.nvda-addon` and `dist/SHA256SUMS.txt`.
+Output: `dist/remoteAudioCall-0.1.4.nvda-addon` and `dist/SHA256SUMS.txt`.
 GitHub Actions builds the same archive on each push. Opus 1.6.1 is downloaded
 with a pinned SHA-256 and linked statically, along with the C++ runtime. The
 helper uses an `asInvoker` manifest and communicates through anonymous pipes.

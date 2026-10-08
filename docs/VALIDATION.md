@@ -16,8 +16,13 @@ Before treating this preview as stable, perform these checks on two computers:
 - Start computer audio before and during a call; verify both remain audible.
   Microphone mute must leave computer audio playing; Stop must end both.
 - Stop listening from the controller and restart only from the controlled side.
-- Disconnect, reconnect, lock/unlock, close NVDA, unplug microphones/playback,
-  and forcibly stop the helper. Audio must stop and never resume automatically.
+- Disconnect and reconnect within 30 seconds during an answered call: audio
+  must stop during the outage and resume only with the same accepted peer.
+  Check mute stays enabled. Hang up while disconnected; verify no recovery.
+- Lock/unlock, close NVDA, leave disconnected for over 30 seconds, or restart
+  either add-on. Audio must stop and require a new call.
+- Unplug/reconnect microphones/playback and forcibly stop the helper. An
+  accepted call should recover through bounded retries; repeated failures end it.
 - Test unavailable microphones and disabled Windows microphone privacy access.
 - Join/leave extra controllers and controlled computers, with and without the
   add-on: audio must continue between the selected pair. Test choosing another
@@ -28,6 +33,22 @@ Before treating this preview as stable, perform these checks on two computers:
 
 The automated tests are not evidence that these interactive two-computer checks
 passed. See GitHub release notes for the checks actually completed for a build.
+
+## 0.1.4 checks completed
+
+- 88 automated tests pass, including helper replacement, retry limits, stale
+  callbacks, mute preservation, accepted-call network recovery, recovery expiry,
+  peer restarts, explicit disconnect, lock and hang-up cancellation.
+- Actual NVDA wxPython menu/dialog/settings smoke checks pass in a separate
+  Python 3.13 process, with NVDA services stubbed and no profile changes.
+- Three-participant public TLS relay checks pass with both plain and add-on
+  observers. An active selected peer disconnects and rejoins with a new Remote
+  ID; the accepted call automatically recovers with the original token, mute,
+  and duplex synthetic frames. Computer audio stays stopped after the outage.
+- Native duplex relay calls pass in both directions with the existing helper,
+  microphone muted from startup and playback volume zero. Forcibly terminating
+  either caller's helper recovers the same accepted call and duplex audio.
+- Audible conversation on two physical NVDA computers remains unverified.
 
 ## 0.1.3 checks completed
 

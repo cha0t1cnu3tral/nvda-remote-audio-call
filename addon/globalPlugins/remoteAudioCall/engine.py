@@ -36,6 +36,10 @@ class StreamEngine:
         self.sequence = 0
         self.last_sequence = -1
         self.muted = False
+        self.helper_generation = 0
+        self.retry_at = 0
+        self.retry_count = 0
+        self.retry_window = 0
 
     @property
     @synchronized
@@ -59,7 +63,7 @@ class StreamEngine:
     @synchronized
     def hello(self):
         if self.peer is not None:
-            self.send("hello", instance=self.instance, system_audio=self.backend.supports_system_audio(), simultaneous=True)
+            self.send("hello", instance=self.instance, system_audio=self.backend.supports_system_audio(), simultaneous=True, call_recovery=True)
 
     @synchronized
     def send(self, action, **payload):
@@ -78,6 +82,8 @@ class StreamEngine:
         self.sequence = 0
         self.last_sequence = -1
         self.muted = False
+        self.retry_count = 0
+        self.retry_window = self.clock()
         self.backend.changed()
 
     @synchronized
@@ -89,6 +95,8 @@ class StreamEngine:
         self.token = None
         self.deadline = 0
         self.muted = False
+        self.helper_generation += 1
+        self.retry_at = 0
         self.backend.stop_audio()
         self.backend.changed()
         if active and announce:
@@ -102,6 +110,9 @@ class StreamEngine:
 
     @synchronized
     def start_call(self):
+        if self.state != "idle":
+            self.backend.notify("A call is already in progress")
+            return
         if not self._require_peer():
             return
         self.stop(announce=False)
@@ -144,7 +155,7 @@ class StreamEngine:
 
     @synchronized
     def toggle_mute(self):
-        if self.state != "call":
+        if self.state not in ("call", "recovering_call"):
             return
         self.muted = not self.muted
         self.backend.mute(self.muted)
@@ -153,16 +164,27 @@ class StreamEngine:
 
     def _start_helper(self, kind):
         token = self.token
+        self.helper_generation += 1
+        generation = self.helper_generation
+        def current(callback, *args):
+            with self._lock:
+                if generation == self.helper_generation:
+                    callback(token, *args)
         self.backend.start_audio(kind,
-            lambda: self._ready(token),
-            lambda packet: self._packet(token, packet),
-            lambda error: self._error(token, error))
+            lambda: current(self._ready),
+            lambda packet: current(self._packet, packet),
+            lambda error: current(self._error, error))
 
     @synchronized
     def _ready(self, token):
         if token != self.token or not self.available:
             return
-        if self.state == "answering_call":
+        if self.state == "recovering_call":
+            self.state = "call"
+            self.deadline = self.retry_at = 0
+            self.backend.mute(self.muted)
+            self.backend.notify("Call audio recovered")
+        elif self.state == "answering_call":
             self.state = "waiting_call"
             self.send("call_accept")
         elif self.state == "connecting_call":
@@ -196,6 +218,24 @@ class StreamEngine:
     def _error(self, token, error):
         if token != self.token:
             return
+        # Retry only an already accepted call, never an invitation or a security
+        # shutdown. Keep the session token and packet sequence for the peer.
+        unsafe = any(word in str(error).lower() for word in ("desktop", "privacy", "permission", "access denied"))
+        if self.state in ("call", "recovering_call") and self.available and not unsafe:
+            now = self.clock()
+            if now - self.retry_window >= 60:
+                self.retry_count = 0
+                self.retry_window = now
+            if self.retry_count < 3:
+                self.helper_generation += 1
+                self.backend.stop_audio()
+                self.retry_count += 1
+                self.state = "recovering_call"
+                self.retry_at = now + 2 ** (self.retry_count - 1)
+                self.deadline = 0
+                self.backend.changed()
+                self.backend.notify("Call audio interrupted. Recovering, attempt " + str(self.retry_count) + " of 3")
+                return
         self.stop(announce=False)
         self.backend.notify("Audio stopped: " + str(error)[:240])
 
@@ -218,7 +258,7 @@ class StreamEngine:
             self.capable = True
             self.peer_system_audio = message.get("system_audio") is True
             if action == "hello":
-                self.send("hello_ack", instance=self.instance, system_audio=self.backend.supports_system_audio(), simultaneous=True)
+                self.send("hello_ack", instance=self.instance, system_audio=self.backend.supports_system_audio(), simultaneous=True, call_recovery=True)
             self.backend.changed()
             return
         if not self.available:
@@ -260,6 +300,11 @@ class StreamEngine:
             self.deadline = 0
             self.backend.notify("Call connected")
             self.backend.changed()
+        elif action == "call_resumed" and self.state == "resuming_call":
+            self.state = "recovering_call"
+            self.retry_at = self.clock() + 1
+            self.deadline = 0
+            self.backend.changed()
         elif action == "audio_ready" and self.state == "outgoing_audio":
             self.state = "preparing_sender"
             self.deadline = self.clock() + 15
@@ -298,7 +343,17 @@ class StreamEngine:
 
     @synchronized
     def tick(self):
+        if self.state == "recovering_call" and self.retry_at and self.clock() >= self.retry_at:
+            self.retry_at = 0
+            if not self.available:
+                self.stop(announce=False)
+                return
+            self.deadline = self.clock() + 15
+            self._start_helper("call")
         if self.deadline and self.clock() >= self.deadline:
+            if self.state == "recovering_call":
+                self._error(self.token, "Audio devices did not restart in time")
+                return
             outgoing_call = self.state == "outgoing_call"
             self.stop(announce=False)
             self.backend.notify("Call unanswered" if outgoing_call else "Audio or call request timed out")
@@ -333,6 +388,9 @@ class Engine:
         self.audio = StreamEngine(StreamBackend(backend, "audio"), clock)
         self.audio.instance = self.call.instance
         self.simultaneous = False
+        self.peer_call_recovery = False
+        self.suspended_call = None
+        self.clock = clock
 
     def __getattr__(self, name):
         return getattr(self.call, name)
@@ -372,15 +430,44 @@ class Engine:
         self.call.disconnect()
         self.audio.disconnect()
         self.simultaneous = False
+        self.peer_call_recovery = False
+
+    def suspend_call(self):
+        """Keep consent for a short outage to this exact peer instance only."""
+        with self.call._lock:
+            if self.peer_call_recovery and self.call.state in ("call", "recovering_call", "resuming_call"):
+                self.suspended_call = dict(
+                    peer_instance=self.call.peer_instance, role=self.call.role,
+                    token=self.call.token, muted=self.call.muted,
+                    sequence=self.call.sequence, last_sequence=self.call.last_sequence,
+                    expires=self.clock() + 30)
+
+    def _restore_call(self):
+        saved = self.suspended_call
+        if not saved or saved["expires"] <= self.clock() or not self.peer_call_recovery or not self.call.available:
+            return False
+        if saved["peer_instance"] != self.call.peer_instance or saved["role"] != self.call.role:
+            return False
+        with self.call._lock:
+            self.suspended_call = None
+            self.call._new("resuming_call", saved["token"])
+            self.call.muted = saved["muted"]
+            self.call.sequence = saved["sequence"]
+            self.call.last_sequence = saved["last_sequence"]
+            self.call.send("call_resume")
+            self.backend.changed()
+        return True
 
     def stop(self, send=True, announce=True):
-        active = self.state != "idle"
+        active = self.state != "idle" or self.suspended_call is not None
+        self.suspended_call = None
         self.call.stop(send=send, announce=False)
         self.audio.stop(send=send, announce=False)
         if active and announce:
             self.backend.notify("Audio and call stopped")
 
     def start_call(self):
+        self.suspended_call = None
         if self.audio.state != "idle" and not self.simultaneous:
             self.audio.stop(announce=False)
         self.call.start_call()
@@ -407,6 +494,22 @@ class Engine:
             self.call.receive(message, origin)
             self.audio.receive(dict(message, action="hello_ack", target_instance=self.instance), origin)
             self.simultaneous = message.get("simultaneous") is True
+            self.peer_call_recovery = message.get("call_recovery") is True
+            if self.call.state == "idle":
+                self._restore_call()
+            return
+        if action == "call_resume":
+            saved = self.suspended_call
+            token = message.get("token")
+            if not isinstance(token, str) or len(token) != 32 or not self.call.available or not self.peer_call_recovery:
+                return
+            if self.call.state == "idle" and saved and token == saved["token"]:
+                self._restore_call()
+            if self.call.token == token and self.call.state in ("call", "recovering_call", "resuming_call"):
+                self.call.send("call_resumed")
+            else:
+                self.call.backend.send(dict(action="stop", protocol=PROTOCOL,
+                    target=self.call.peer, target_instance=self.call.peer_instance, token=token))
             return
         stream = self._stream(message)
         if action == "call_offer" and self.audio.state != "idle" and not self.simultaneous:
@@ -424,5 +527,9 @@ class Engine:
         self._stream(message).receive_frame(message, origin)
 
     def tick(self):
+        if self.suspended_call and self.clock() >= self.suspended_call["expires"]:
+            self.suspended_call = None
+            self.backend.notify("Call recovery timed out. Start a new call")
+            self.backend.changed()
         self.call.tick()
         self.audio.tick()

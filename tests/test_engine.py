@@ -203,7 +203,10 @@ class SessionTests(unittest.TestCase):
         self.call()
         self.b.helpers[-1][3]("microphone disconnected")
         self.flush()
-        self.assertEqual((self.controller.call.state, self.controlled.call.state), ("idle", "idle"))
+        self.assertEqual((self.controller.call.state, self.controlled.call.state), ("call", "recovering_call"))
+        self.now += 1
+        self.controlled.tick()
+        self.assertEqual(self.controlled.call.state, "call")
         self.assertEqual((self.controller.audio.state, self.controlled.audio.state), ("audio", "audio"))
 
     def test_call_survives_audio_helper_failure(self):
@@ -305,12 +308,173 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(self.controller.state, "idle")
         self.assertFalse(self.wire)
 
-    def test_error_ends_both_sides(self):
+    def test_helper_failure_recovers_without_hanging_up_peer(self):
         self.call()
+        token = self.controlled.token
+        self.b.helpers[-1][3]("microphone disconnected")
+        self.flush()
+        self.assertEqual(self.controller.state, "call")
+        self.assertEqual(self.controlled.state, "recovering_call")
+        self.now += 1
+        self.controlled.tick()
+        self.assertEqual(self.controlled.state, "call")
+        self.assertEqual(self.controlled.token, token)
+        self.b.helpers[-1][2](b"recovered voice")
+        self.flush()
+        self.assertEqual(self.a.played, [b"recovered voice"])
+
+    def test_repeated_helper_failure_is_bounded_and_ends_both_sides(self):
+        self.call()
+        for delay in (1, 2, 4):
+            self.b.helpers[-1][3]("microphone disconnected")
+            self.now += delay
+            self.controlled.tick()
         self.b.helpers[-1][3]("microphone disconnected")
         self.flush()
         self.assertEqual((self.controller.state, self.controlled.state), ("idle", "idle"))
         self.assertIn("Audio stopped: microphone disconnected", self.b.notifications)
+
+    def test_replaced_helper_callbacks_are_ignored_with_same_call_token(self):
+        self.call()
+        old = self.b.helpers[-1]
+        old[3]("device lost")
+        self.now += 1
+        self.controlled.tick()
+        old[1]()
+        old[2](b"stale")
+        old[3]("stale failure")
+        self.assertEqual(self.controlled.state, "call")
+        self.assertFalse(self.wire)
+
+    def test_mute_survives_recovery_and_can_change_while_recovering(self):
+        self.call()
+        self.controlled.toggle_mute()
+        self.b.helpers[-1][3]("device lost")
+        self.now += 1
+        self.controlled.tick()
+        self.assertTrue(self.controlled.muted)
+        self.assertTrue(self.b.mutes[-1])
+        self.b.helpers[-1][3]("device lost again")
+        self.controlled.toggle_mute()
+        self.assertFalse(self.controlled.muted)
+
+    def test_stop_during_recovery_cancels_restart(self):
+        self.call()
+        self.b.helpers[-1][3]("device lost")
+        count = len(self.b.helpers)
+        self.controlled.stop()
+        self.now += 10
+        self.controlled.tick()
+        self.flush()
+        self.assertEqual(len(self.b.helpers), count)
+        self.assertEqual(self.controller.state, "idle")
+
+    def test_security_failure_does_not_retry(self):
+        self.call()
+        self.b.helpers[-1][3]("Audio stopped because Windows switched desktops")
+        self.flush()
+        self.assertEqual((self.controller.state, self.controlled.state), ("idle", "idle"))
+
+    def test_recovery_device_startup_timeout_retries(self):
+        self.call()
+        self.b.auto_ready = False
+        self.b.helpers[-1][3]("device lost")
+        self.now += 1
+        self.controlled.tick()
+        self.now += 16
+        self.controlled.tick()
+        self.assertEqual(self.controlled.state, "recovering_call")
+        self.assertEqual(self.controlled.call.retry_count, 2)
+
+    def test_start_call_during_call_does_not_hang_up(self):
+        self.call()
+        token = self.controller.token
+        self.controller.start_call()
+        self.flush()
+        self.assertEqual(self.controller.token, token)
+        self.assertEqual(self.controlled.state, "call")
+
+    def reconnect_call(self):
+        self.controller.suspend_call()
+        self.controlled.suspend_call()
+        self.controller.disconnect()
+        self.controlled.disconnect()
+        self.now += 6
+        self.controller.connect("controlling", 2)
+        self.controlled.connect("controlled", 1)
+        self.flush()
+        self.now += 1
+        self.controller.tick()
+        self.controlled.tick()
+        self.flush()
+
+    def test_brief_network_outage_restores_accepted_call_and_mute(self):
+        self.call()
+        token = self.controller.token
+        self.controller.toggle_mute()
+        self.a.helpers[-1][2](b"before outage")
+        self.flush()
+        self.reconnect_call()
+        self.assertEqual((self.controller.state, self.controlled.state), ("call", "call"))
+        self.assertEqual(self.controller.token, token)
+        self.assertTrue(self.controller.muted)
+        self.assertEqual((self.a.invitations, self.b.invitations), (0, 1))
+        self.a.helpers[-1][2](b"after outage")
+        self.flush()
+        self.assertEqual(self.b.played, [b"before outage", b"after outage"])
+
+    def test_hangup_while_disconnected_prevents_peer_resuming(self):
+        self.call()
+        self.controller.suspend_call()
+        self.controlled.suspend_call()
+        self.controller.disconnect()
+        self.controlled.disconnect()
+        self.controlled.stop()
+        self.controller.connect("controlling", 2)
+        self.controlled.connect("controlled", 1)
+        self.flush()
+        self.now += 1
+        self.controller.tick()
+        self.controlled.tick()
+        self.assertEqual((self.controller.state, self.controlled.state), ("idle", "idle"))
+
+    def test_network_recovery_expires_after_thirty_seconds(self):
+        self.call()
+        self.controller.suspend_call()
+        self.controlled.suspend_call()
+        self.controller.disconnect()
+        self.controlled.disconnect()
+        self.now += 31
+        self.controller.tick()
+        self.controlled.tick()
+        self.controller.connect("controlling", 2)
+        self.controlled.connect("controlled", 1)
+        self.flush()
+        self.assertEqual((self.controller.state, self.controlled.state), ("idle", "idle"))
+        self.assertIsNone(self.controller.suspended_call)
+
+    def test_recovery_never_resumes_with_restarted_peer(self):
+        self.call()
+        self.controller.suspend_call()
+        self.controller.disconnect()
+        self.controlled.stop()
+        self.controlled.call.instance = self.controlled.audio.instance = "f"*32
+        self.controller.connect("controlling", 2)
+        self.flush()
+        self.assertEqual(self.controller.state, "idle")
+
+    def test_legacy_peer_does_not_enable_network_recovery(self):
+        self.call()
+        self.controller.peer_call_recovery = False
+        self.controller.suspend_call()
+        self.controller.disconnect()
+        self.assertIsNone(self.controller.suspended_call)
+
+    def test_invitation_is_not_resumed_after_network_outage(self):
+        self.controller.start_call()
+        self.flush()
+        self.reconnect_call()
+        self.assertEqual((self.controller.state, self.controlled.state), ("idle", "idle"))
 
     def test_permission_and_disconnect_never_resume(self):
         self.call()

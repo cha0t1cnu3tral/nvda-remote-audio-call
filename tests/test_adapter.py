@@ -105,6 +105,74 @@ class AdapterTests(unittest.TestCase):
         self.plugin.send(dict(action="stop", protocol=2, token="f"*32))
         self.assertEqual(self.transport.queue.qsize(), 7)
 
+    def test_start_with_one_candidate_skips_remote_computer_dialog(self):
+        self.plugin.engine.disconnect()
+        self.plugin.pair = None
+        with patch.object(self.plugin_module, "HELPER", Mock(is_file=lambda: True)), patch.object(self.plugin, "on_choose_peer") as chooser:
+            self.plugin.start_action("call")
+        chooser.assert_not_called()
+        self.assertEqual(self.plugin.engine.call.state, "outgoing_call")
+        self.assertEqual(self.plugin.engine.peer, 2)
+
+    def test_recovery_helper_is_muted_from_process_start(self):
+        self.plugin.settings = {"input": "default", "output": "default", "volume": 100}
+        self.plugin.engine.call.muted = True
+        with patch.object(self.plugin_module, "NativeAudio") as native:
+            self.plugin.start_audio("call", Mock(), Mock(), Mock())
+            self.assertTrue(native.call_args.kwargs["initial_muted"])
+
+    def test_lost_connection_announces_call_interruption(self):
+        self.plugin.engine.call.state = "call"
+        with patch.object(self.plugin, "notify") as notify:
+            self.plugin._connection_ended()
+        notify.assert_called_once_with("Remote connection lost. Start a new call when Remote Access reconnects")
+
+    def test_network_rejoin_restores_call_to_same_instance_with_new_remote_id(self):
+        self.plugin.engine.peer_call_recovery = True
+        self.plugin.engine.call.state = "call"
+        self.plugin.engine.call.token = "c"*32
+        self.plugin.engine.call.muted = True
+        self.plugin._connection_ended()
+        self.assertIsNotNone(self.plugin.engine.suspended_call)
+        self.plugin._connection_started(self.transport)
+        self.plugin._membership(self.transport, dict(type="channel_joined", clients=[dict(id=8, connection_type="slave")]))
+        self.plugin._control(self.transport, dict(action="hello", protocol=2, instance="a"*32, simultaneous=True, system_audio=True, call_recovery=True), 8)
+        self.assertEqual(self.plugin.engine.peer, 8)
+        self.assertEqual(self.plugin.engine.call.state, "resuming_call")
+        self.assertTrue(self.plugin.engine.muted)
+        self.assertEqual(self.plugin.engine.token, "c"*32)
+        self.assertIsNone(self.plugin.engine.suspended_call)
+
+    def test_explicit_remote_disconnect_cancels_recovery(self):
+        self.plugin.engine.peer_call_recovery = True
+        self.plugin.engine.call.state = "call"
+        self.plugin.engine.call.token = "c"*32
+        self.plugin.closing_handler()
+        self.assertIsNone(self.plugin.engine.suspended_call)
+        self.assertEqual(self.plugin.engine.state, "idle")
+
+    def test_deferred_closing_followed_by_disconnected_cannot_resume(self):
+        self.plugin.engine.peer_call_recovery = True
+        self.plugin.engine.call.state = "call"
+        self.plugin.engine.call.token = "c"*32
+        pending = []
+        with patch.object(self.plugin_module.wx, "CallAfter", side_effect=lambda *args: pending.append(args)):
+            worker = threading.Thread(target=lambda: (self.plugin.closing_handler(), self.plugin.disconnect_handler()))
+            worker.start()
+            worker.join()
+        for callback, *args in pending:
+            callback(*args)
+        self.assertIsNone(self.plugin.engine.suspended_call)
+        self.assertEqual(self.plugin.engine.state, "idle")
+
+    def test_lock_cancels_pending_network_recovery(self):
+        self.plugin.engine.peer_call_recovery = True
+        self.plugin.engine.call.state = "call"
+        self.plugin.engine.call.token = "c"*32
+        self.plugin._connection_ended()
+        self.plugin._lock_changed(True)
+        self.assertIsNone(self.plugin.engine.suspended_call)
+
     def test_lock_sends_stop_and_closes_helper(self):
         self.plugin.engine.state = "call"
         self.plugin.engine.token = "f"*32

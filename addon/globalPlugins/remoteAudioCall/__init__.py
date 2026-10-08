@@ -24,6 +24,8 @@ STATUS = {
     "idle": "Off", "outgoing_call": "Calling", "incoming_call": "Incoming call",
     "answering_call": "Answering", "connecting_call": "Connecting call",
     "waiting_call": "Waiting for call connection", "call": "Call",
+    "recovering_call": "Recovering call audio",
+    "resuming_call": "Reconnecting call",
     "outgoing_audio": "Requesting computer audio", "preparing_receiver": "Preparing audio playback",
     "waiting_audio": "Waiting for computer audio", "preparing_sender": "Preparing computer audio capture",
     "audio": "Computer audio",
@@ -86,6 +88,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         self.local_role = None
         self.connection_epoch = 0
         self.connection_live = threading.Event()
+        self.recovery_cancelled = False
         self.discovery_until = 0
         self.peer_dialog = None
 
@@ -137,9 +140,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             _, peer, instance = self.pair
             if peer in candidates and self.peers[peer]["instance"] == instance:
                 return
+            active = self.engine.state != "idle"
+            self.engine.suspend_call()
             self.engine.disconnect()
             self.pair = None
             log.info("Remote Audio and Call selected computer disconnected")
+            if active:
+                self.notify("Remote computer disconnected. Waiting up to 30 seconds to recover the call" if self.engine.suspended_call else "Remote computer disconnected. Start a new call when it reconnects")
         preferred = [peer for peer in candidates if self.peers[peer]["instance"] == self.preferred_instance]
         if len(preferred) == 1:
             self.select_peer(preferred[0], announce=False)
@@ -153,7 +160,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         info = self.peers[peer]
         pair = (self.local_role, peer, info["instance"])
         if pair != self.pair:
+            saved = self.engine.suspended_call
             self.engine.stop(announce=False)
+            if saved and saved["peer_instance"] == info["instance"] and saved["role"] == self.local_role:
+                self.engine.suspended_call = saved
             self.pair = pair
             self.preferred_instance = info["instance"]
             self.engine.connect(self.local_role, peer, info["instance"])
@@ -180,7 +190,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     def start_action(self, kind):
         if not self.engine.available:
             if self._candidates() and not self.locked and not isRunningOnSecureDesktop() and not isLockScreenModeActive() and HELPER.is_file():
-                if not self.on_choose_peer():
+                candidates = self._candidates()
+                if len(candidates) == 1:
+                    if not self.select_peer(candidates[0], announce=False):
+                        return
+                elif not self.on_choose_peer():
                     return
             else:
                 self.notify(self.availability_reason())
@@ -243,8 +257,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         self.items["audio"][0].Enable(unlocked and HELPER.is_file() and self.local_role == "controlled" and self.supports_system_audio() and self.engine.audio.state == "idle")
         for name in ("answer", "decline"):
             self.items[name][0].Enable(ready and state == "incoming_call")
-        self.items["stop"][0].Enable(self.engine.state != "idle" or self.native is not None or self.audio_native is not None)
-        self.items["mute"][0].Enable(state == "call")
+        self.items["stop"][0].Enable(self.engine.state != "idle" or self.engine.suspended_call is not None or self.native is not None or self.audio_native is not None)
+        self.items["mute"][0].Enable(state in ("call", "recovering_call"))
         self.items["mute"][0].Check(self.engine.muted)
         for name in ("devices", "settings", "status", "peer"):
             self.items[name][0].Enable(True)
@@ -289,7 +303,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     def start_audio(self, kind, ready, packet, error, stream="call"):
         self.stop_audio(stream=stream)
         try:
-            native = NativeAudio(kind, self.settings.copy(), ready, packet, error, wx.CallAfter)
+            native = NativeAudio(kind, self.settings.copy(), ready, packet, error, wx.CallAfter,
+                                 initial_muted=stream == "call" and self.engine.muted)
             setattr(self, "audio_native" if stream == "audio" else "native", native)
         except (OSError, ValueError) as exc:
             wx.CallAfter(error, str(exc))
@@ -327,11 +342,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     def _discover(self):
         if self.connection_live.is_set() and self.transport and self.transport.connected:
             self.send(dict(action="hello", protocol=PROTOCOL, instance=self.engine.instance,
-                           simultaneous=True, system_audio=self.supports_system_audio()))
+                           simultaneous=True, call_recovery=True, system_audio=self.supports_system_audio()))
 
     def _attach(self, transport, session, role=None):
         self._detach()
         self.transport, self.session = transport, session
+        self.recovery_cancelled = False
         self.local_role = role
         if transport.connected:
             self.connection_live.set()
@@ -360,9 +376,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         transport.parse = parse
         # Bind the source transport, rather than looking up a potentially newer one.
         self.disconnect_handler = lambda **kwargs: self._connection_ended(transport=transport)
+        self.closing_handler = lambda **kwargs: self._connection_ended(transport=transport, recover=False)
         self.connect_handler = lambda **kwargs: self._connection_started(transport)
         transport.transportDisconnected.register(self.disconnect_handler)
-        transport.transportClosing.register(self.disconnect_handler)
+        transport.transportClosing.register(self.closing_handler)
         transport.transportConnected.register(self.connect_handler)
         self.last_hello = 0
         self.discovery_until = time.monotonic() + 2
@@ -371,6 +388,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if self.transport is not transport or (epoch is not None and epoch != self.connection_epoch):
             return
         if data["type"] == "channel_joined":
+            self.engine.suspend_call()
             self.engine.disconnect()
             self.pair = None
             self.peers = {}
@@ -412,7 +430,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             if not isinstance(instance, str) or len(instance) != 32:
                 return
             info = dict(instance=instance, simultaneous=data.get("simultaneous") is True,
-                        system_audio=data.get("system_audio") is True)
+                        system_audio=data.get("system_audio") is True,
+                        call_recovery=data.get("call_recovery") is True)
             peers = self.peers.copy()
             peers[origin] = info
             self.peers = peers
@@ -420,7 +439,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             if action == "hello":
                 self.send(dict(action="hello_ack", protocol=PROTOCOL, target=origin,
                     target_instance=instance, instance=self.engine.instance,
-                    simultaneous=True, system_audio=self.supports_system_audio()))
+                    simultaneous=True, call_recovery=True, system_audio=self.supports_system_audio()))
             if origin == self.engine.peer:
                 self.engine.receive(dict(data, target_instance=self.engine.instance), origin)
             self.changed()
@@ -456,6 +475,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     def _finish_connection_started(self, transport, epoch):
         if self.transport is not transport or epoch != self.connection_epoch:
             return
+        if self.recovery_cancelled:
+            self.engine.suspended_call = None
+        else:
+            self.engine.suspend_call()
         self.engine.disconnect()
         self.pair = None
         self.peers = {}
@@ -464,12 +487,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         log.info("Remote Audio and Call transport connected; waiting for channel membership")
         self.changed()
 
-    def _connection_ended(self, transport=None, **kwargs):
+    def _connection_ended(self, transport=None, recover=True, **kwargs):
         # Remote invokes disconnect handlers on its network thread. wx menus
         # and the incoming-call dialog must only be touched on the UI thread.
         transport = transport or self.transport
         if self.transport is not transport:
             return
+        if not recover:
+            self.recovery_cancelled = True
+        recover = recover and not self.recovery_cancelled
         self.connection_epoch += 1
         epoch = self.connection_epoch
         self.connection_live.clear()
@@ -478,28 +504,36 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         self.stop_audio(stream="call")
         self.stop_audio(stream="audio")
         if threading.current_thread() is not threading.main_thread():
-            wx.CallAfter(self._finish_connection_ended, transport, epoch)
+            wx.CallAfter(self._finish_connection_ended, transport, epoch, recover)
             return
-        self._finish_connection_ended(transport, epoch)
+        self._finish_connection_ended(transport, epoch, recover)
 
-    def _finish_connection_ended(self, transport, epoch=None):
+    def _finish_connection_ended(self, transport, epoch=None, recover=True):
         if self.transport is not transport or (epoch is not None and epoch != self.connection_epoch):
             return
+        active = self.engine.state != "idle"
+        if recover:
+            self.engine.suspend_call()
+        else:
+            self.engine.suspended_call = None
         self.engine.disconnect()
         self.pair = None
         self.members = {}
         self.peers = {}
         log.info("Remote Audio and Call connection ended; audio sessions reset")
+        if active:
+            self.notify("Remote connection lost. Waiting up to 30 seconds to recover the call" if self.engine.suspended_call else "Remote connection lost. Start a new call when Remote Access reconnects")
         self.changed()
 
     def _detach(self):
+        self.engine.suspended_call = None
         self.engine.disconnect()
         transport = self.transport
         if transport:
             if transport.parse is self.hooked_parse:
                 transport.parse = self.old_parse
             transport.transportDisconnected.unregister(self.disconnect_handler)
-            transport.transportClosing.unregister(self.disconnect_handler)
+            transport.transportClosing.unregister(self.closing_handler)
             transport.transportConnected.unregister(self.connect_handler)
         self.transport = self.session = self.old_parse = self.hooked_parse = self.pair = None
         self.members = None
@@ -554,6 +588,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             method(getattr(self, "script_" + name))
 
     def report_status(self):
+        if self.engine.suspended_call:
+            self.notify("Waiting for Remote Access to reconnect and recover the call. Stop audio or hang up cancels recovery")
+            return
         if not self.engine.available or not HELPER.is_file():
             self.notify("Off. " + self.availability_reason())
         else:

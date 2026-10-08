@@ -85,6 +85,7 @@ def main():
             while time.monotonic() < limit:
                 for plugin in plugins:
                     plugin._reconcile_peer()
+                    plugin.engine.tick()
                 for connection, plugin in zip(sockets, plugins):
                     while not plugin.transport.queue.empty():
                         connection.sendall(plugin.transport.queue.get())
@@ -110,6 +111,16 @@ def main():
                 pump(lambda: all(p.native and p.native.stats[0] >= 10 and p.native.stats[1] >= 10
                     and p.native.stats[2] > 0 for p in plugins))
                 print("Native duplex capture, relay, Opus decoding and playback-buffer consumption passed")
+                failed = plugins[caller].native
+                token = plugins[caller].engine.call.token
+                failed.process.kill()
+                pump(lambda: plugins[caller].native is not None and plugins[caller].native is not failed
+                     and plugins[caller].engine.call.state == "call"
+                     and plugins[caller].native.stats[0] >= 10 and plugins[caller].native.stats[1] >= 10
+                     and plugins[caller].native.stats[2] > 0)
+                assert plugins[caller].engine.call.token == token
+                assert plugins[callee].engine.call.state == "call"
+                print("Forced native-helper failure recovered with the accepted call and duplex audio intact")
             else:
                 for index, plugin in enumerate(plugins):
                     plugin.play.reset_mock()

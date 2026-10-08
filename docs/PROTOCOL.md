@@ -81,4 +81,23 @@ completion. Selection remembers the process instance across reconnects of
 that session, including a new Remote ID. Ending/replacing the Remote session
 clears the preference. No different peer is silently substituted when the
 selected one leaves. Reconnection restores controls after discovery; it does not
-reopen microphones or resume computer audio without a new user action.
+resume computer audio without a new user action.
+
+Version 0.1.4 adds the optional `call_recovery: true` discovery capability.
+For an accepted call only, an unexpected transport outage or selected-peer
+departure saves its token, peer instance, local role, mute and sequence counters
+for 30 seconds. Helpers still stop immediately. Rediscovery must match the
+saved instance and role, and both peers must advertise call recovery.
+`call_resume` requests confirmation of the existing token; `call_resumed`
+acknowledges it. A peer without that accepted call replies with a matching
+`stop`. Only confirmation allows helper restart; no new incoming invitation or
+automatic acceptance occurs. Sequence counters continue across the outage.
+Explicit transport closing, Stop, lock and plugin detach cancel saved recovery.
+Expired recovery, a changed peer instance, and unanswered invitations cannot resume.
+
+Established-call helper failures retry locally after 1, 2 and 4 seconds, with
+at most three attempts per 60-second window and 15 seconds per device startup.
+Security/desktop failures stop immediately. A helper generation guards all
+callbacks so a replaced process cannot send frames or stop its replacement.
+Replacement capture starts with the current mute state before any microphone
+frames can be captured.
