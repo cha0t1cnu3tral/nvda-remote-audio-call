@@ -34,6 +34,17 @@ Before treating this preview as stable, perform these checks on two computers:
 The automated tests are not evidence that these interactive two-computer checks
 passed. See GitHub release notes for the checks actually completed for a build.
 
+## 0.1.5 checks completed
+
+- 98 tests pass on Python 3.13 and 3.14, including sharing recovery after an
+  outage, cancellation/expiry/peer identity, capture/playback helper retries,
+  simultaneous call recovery, and shared-audio diagnostics.
+- Actual NVDA wxPython menu/dialog/settings checks pass with NVDA services stubbed.
+- Public TLS relay checks pass calls and simultaneous streams, plus recovery of
+  both streams with plain and add-on observers and changed Remote client IDs.
+- Native build and non-silent stereo signal validation are pending.
+- No audible two-computer NVDA session has been verified.
+
 ## 0.1.4 checks completed
 
 - 88 automated tests pass, including helper replacement, retry limits, stale

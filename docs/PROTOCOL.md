@@ -60,7 +60,8 @@ kind and the payload. Types: 1 Opus packet, 2 microphone mute (one byte),
 (helper to plugin).
 Helper type 7 carries four little-endian uint32 values: encoded capture
 packets, decoded playback packets, samples consumed by the playback buffer,
-and the latest microphone peak (0–32768). These local health counters are
+and the latest signal peak (0–32768). For calls this is microphone input; for sharing it is captured system input
+or decoded receiver input. These local health counters are
 not transmitted to the relay. `--mute 1` starts capture muted for diagnostic
 tests; the normal call starts unmuted only after user acceptance.
 Closing/killing the child tears down audio devices. No audio files, listening
@@ -80,8 +81,11 @@ Monitoring attaches as soon as a Remote session exists, before connection
 completion. Selection remembers the process instance across reconnects of
 that session, including a new Remote ID. Ending/replacing the Remote session
 clears the preference. No different peer is silently substituted when the
-selected one leaves. Reconnection restores controls after discovery; it does not
-resume computer audio without a new user action.
+selected one leaves. Version 0.1.5 also saves established computer sharing on the controlled
+computer for up to 30 seconds. After rediscovering the same peer instance and
+role it negotiates a fresh audio_offer and stream token. Only the original
+sharing sender restarts capture; stop, explicit disconnect, lock, changed peer,
+expiry and detach cancel this intent. No new protocol capability is needed.
 
 Version 0.1.4 adds the optional `call_recovery: true` discovery capability.
 For an accepted call only, an unexpected transport outage or selected-peer
@@ -95,7 +99,7 @@ automatic acceptance occurs. Sequence counters continue across the outage.
 Explicit transport closing, Stop, lock and plugin detach cancel saved recovery.
 Expired recovery, a changed peer instance, and unanswered invitations cannot resume.
 
-Established-call helper failures retry locally after 1, 2 and 4 seconds, with
+Established call and computer-audio helper failures retry locally after 1, 2 and 4 seconds, with
 at most three attempts per 60-second window and 15 seconds per device startup.
 Security/desktop failures stop immediately. A helper generation guards all
 callbacks so a replaced process cannot send frames or stop its replacement.

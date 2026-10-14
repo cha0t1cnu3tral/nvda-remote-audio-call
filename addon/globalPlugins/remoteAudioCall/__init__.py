@@ -25,6 +25,7 @@ STATUS = {
     "answering_call": "Answering", "connecting_call": "Connecting call",
     "waiting_call": "Waiting for call connection", "call": "Call",
     "recovering_call": "Recovering call audio",
+    "recovering_audio": "Recovering computer audio",
     "resuming_call": "Reconnecting call",
     "outgoing_audio": "Requesting computer audio", "preparing_receiver": "Preparing audio playback",
     "waiting_audio": "Waiting for computer audio", "preparing_sender": "Preparing computer audio capture",
@@ -146,7 +147,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             self.pair = None
             log.info("Remote Audio and Call selected computer disconnected")
             if active:
-                self.notify("Remote computer disconnected. Waiting up to 30 seconds to recover the call" if self.engine.suspended_call else "Remote computer disconnected. Start a new call when it reconnects")
+                self.notify("Remote computer disconnected. Waiting up to 30 seconds to recover audio" if self.engine.suspended_call or self.engine.suspended_audio else "Remote computer disconnected. Start audio again when it reconnects")
         preferred = [peer for peer in candidates if self.peers[peer]["instance"] == self.preferred_instance]
         if len(preferred) == 1:
             self.select_peer(preferred[0], announce=False)
@@ -161,9 +162,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         pair = (self.local_role, peer, info["instance"])
         if pair != self.pair:
             saved = self.engine.suspended_call
+            saved_audio = self.engine.suspended_audio
             self.engine.stop(announce=False)
             if saved and saved["peer_instance"] == info["instance"] and saved["role"] == self.local_role:
                 self.engine.suspended_call = saved
+            if saved_audio and saved_audio["peer_instance"] == info["instance"] and saved_audio["role"] == self.local_role:
+                self.engine.suspended_audio = saved_audio
             self.pair = pair
             self.preferred_instance = info["instance"]
             self.engine.connect(self.local_role, peer, info["instance"])
@@ -257,7 +261,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         self.items["audio"][0].Enable(unlocked and HELPER.is_file() and self.local_role == "controlled" and self.supports_system_audio() and self.engine.audio.state == "idle")
         for name in ("answer", "decline"):
             self.items[name][0].Enable(ready and state == "incoming_call")
-        self.items["stop"][0].Enable(self.engine.state != "idle" or self.engine.suspended_call is not None or self.native is not None or self.audio_native is not None)
+        self.items["stop"][0].Enable(self.engine.state != "idle" or self.engine.suspended_call is not None or self.engine.suspended_audio is not None or self.native is not None or self.audio_native is not None)
         self.items["mute"][0].Enable(state in ("call", "recovering_call"))
         self.items["mute"][0].Check(self.engine.muted)
         for name in ("devices", "settings", "status", "peer"):
@@ -477,6 +481,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             return
         if self.recovery_cancelled:
             self.engine.suspended_call = None
+            self.engine.suspended_audio = None
         else:
             self.engine.suspend_call()
         self.engine.disconnect()
@@ -516,17 +521,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             self.engine.suspend_call()
         else:
             self.engine.suspended_call = None
+            self.engine.suspended_audio = None
         self.engine.disconnect()
         self.pair = None
         self.members = {}
         self.peers = {}
         log.info("Remote Audio and Call connection ended; audio sessions reset")
         if active:
-            self.notify("Remote connection lost. Waiting up to 30 seconds to recover the call" if self.engine.suspended_call else "Remote connection lost. Start a new call when Remote Access reconnects")
+            self.notify("Remote connection lost. Waiting up to 30 seconds to recover audio" if self.engine.suspended_call or self.engine.suspended_audio else "Remote connection lost. Start audio again when Remote Access reconnects")
         self.changed()
 
     def _detach(self):
         self.engine.suspended_call = None
+        self.engine.suspended_audio = None
         self.engine.disconnect()
         transport = self.transport
         if transport:
@@ -588,6 +595,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             method(getattr(self, "script_" + name))
 
     def report_status(self):
+        if self.engine.suspended_audio:
+            self.notify("Waiting for Remote Access to reconnect and recover computer audio. Stop audio or hang up cancels recovery")
+            return
         if self.engine.suspended_call:
             self.notify("Waiting for Remote Access to reconnect and recover the call. Stop audio or hang up cancels recovery")
             return
@@ -612,6 +622,22 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                     suffix += ". Microphone is silent. Check the selected microphone"
                 else:
                     suffix += ". Two-way audio is flowing"
+            if self.engine.audio.state == "audio" and self.audio_native:
+                captured, decoded, rendered, peak = self.audio_native.stats
+                if self.engine.role == "controlled":
+                    suffix += ". Computer audio capture is producing frames" if captured else ". No computer audio captured yet. Play sound in an application"
+                    if captured and peak == 0:
+                        suffix += ". Captured computer audio is silent"
+                elif not decoded:
+                    suffix += ". No computer audio received from the controlled computer"
+                elif not rendered:
+                    suffix += ". Computer audio received, waiting for playback"
+                else:
+                    suffix += ". Computer audio is reaching the playback device"
+                    if peak == 0:
+                        suffix += ". Received computer audio is silent"
+                if self.engine.role == "controlling" and self.settings.get("volume") == 0:
+                    suffix += ". Listening volume is zero. Increase it in Settings"
             self.notify(state + ". Remote computer " + str(self.engine.peer) + suffix)
 
     def on_settings(self, event=None):

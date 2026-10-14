@@ -125,7 +125,7 @@ class AdapterTests(unittest.TestCase):
         self.plugin.engine.call.state = "call"
         with patch.object(self.plugin, "notify") as notify:
             self.plugin._connection_ended()
-        notify.assert_called_once_with("Remote connection lost. Start a new call when Remote Access reconnects")
+        notify.assert_called_once_with("Remote connection lost. Start audio again when Remote Access reconnects")
 
     def test_network_rejoin_restores_call_to_same_instance_with_new_remote_id(self):
         self.plugin.engine.peer_call_recovery = True
@@ -531,3 +531,34 @@ class AdapterTests(unittest.TestCase):
         self.plugin.engine.stop()
         helper.stop.assert_called_once()
         self.plugin.items["stop"][0].Enable.assert_called_with(False)
+
+    def test_controlled_network_rejoin_restarts_shared_audio(self):
+        self.plugin._detach()
+        self.session.leaders, self.session.followers = {2: {}}, {}
+        self.plugin._attach(self.transport, self.session, "controlled")
+        self.plugin.discovery_until = 0
+        self.hello(2, instance="a"*32)
+        self.plugin.engine.audio.state = "audio"
+        self.plugin.engine.audio.token = "b"*32
+        self.plugin._connection_ended()
+        self.assertIsNotNone(self.plugin.engine.suspended_audio)
+        self.plugin._connection_started(self.transport)
+        self.plugin._membership(self.transport, dict(type="channel_joined", clients=[dict(id=3, connection_type="master")]))
+        self.hello(3, instance="a"*32)
+        self.assertEqual(self.plugin.engine.audio.state, "outgoing_audio")
+        self.assertIsNone(self.plugin.engine.suspended_audio)
+
+    def test_explicit_disconnect_cancels_pending_computer_audio_recovery(self):
+        self.plugin.engine.suspended_audio = dict(peer_instance="a"*32, role="controlled", expires=9999999999)
+        self.plugin._connection_ended(recover=False)
+        self.assertIsNone(self.plugin.engine.suspended_audio)
+
+    def test_shared_audio_status_identifies_zero_volume_and_received_silence(self):
+        self.plugin.settings = dict(volume=0)
+        self.plugin.engine.audio.state = "audio"
+        self.plugin.audio_native = Mock(stats=(0, 50, 96000, 0))
+        with patch.object(self.plugin_module, "HELPER", Mock(is_file=lambda: True)), patch.object(self.plugin, "notify") as notify:
+            self.plugin.report_status()
+        message = notify.call_args.args[0]
+        self.assertIn("Received computer audio is silent", message)
+        self.assertIn("Listening volume is zero", message)

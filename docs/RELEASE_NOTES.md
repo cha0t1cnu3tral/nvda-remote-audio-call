@@ -1,3 +1,33 @@
+# Remote Audio and Call 0.1.5: computer-audio recovery and silence diagnostics
+
+Install **remoteAudioCall-0.1.5.nvda-addon** on both computers and restart NVDA.
+
+- Fix computer sharing remaining stopped after brief unexpected Remote outages.
+  Version 0.1.4 restored accepted calls only. The controlled computer now retains
+  an established sharing session for up to 30 seconds and negotiates a fresh
+  stream after rediscovering the same running peer, including a new Remote ID.
+- Recover transient computer capture/playback helper failures after one, two and
+  four seconds, with the same retry limit and stale-callback protection as calls.
+  Calls and shared audio remain independent.
+- Stop, explicit Remote disconnect, locking, changing peers, expiry and NVDA
+  restart cancel pending sharing recovery. Unstarted sharing never auto-starts.
+- Report status now distinguishes missing capture, silent captured samples,
+  missing received computer audio, silent decoded samples, playback progress,
+  and zero listening volume. Previously shared-audio status only named the mode.
+- Add a native test using a non-silent synthetic stereo tone. Earlier native
+  checks counted frames and playback samples with muted inputs, so they could
+  pass without demonstrating a non-silent signal.
+
+Validation so far: 98 tests pass on Python 3.13 and 3.14; actual NVDA wxPython
+menu/dialog/settings checks pass with NVDA services stubbed. Public TLS relay
+checks pass calls and simultaneous streams, plus call and sharing recovery with
+plain and add-on observers. Native build and signal validation are pending.
+
+The old helper captures a local test tone successfully; a universal 0.1.4
+capture failure has not been reproduced. The recovery defects above are
+confirmed, but the exact cause of every reported silent session is not yet
+established. This remains a preview; audible two-computer NVDA testing is pending.
+
 # Remote Audio and Call 0.1.3: usable controls with extra Remote computers
 
 Install **remoteAudioCall-0.1.3.nvda-addon** on the two computers exchanging

@@ -29,7 +29,7 @@ using namespace std::chrono_literals;
 constexpr int RATE = 48000, FRAME = 960, MAX_PACKET = 1275;
 std::atomic<bool> running{true}, muted{false};
 std::atomic<int> volume{100}, started{0};
-std::atomic<uint32_t> capturedPackets{0}, decodedPackets{0}, renderedSamples{0}, microphonePeak{0};
+std::atomic<uint32_t> capturedPackets{0}, decodedPackets{0}, renderedSamples{0}, signalPeak{0};
 std::mutex outputMutex, pcmMutex;
 std::deque<int16_t> pcm;
 
@@ -134,11 +134,11 @@ void capture(const std::wstring& mode, int channels, DWORD pid, const std::wstri
                 if(status&AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) pending.clear();
                 size_t n=static_cast<size_t>(frames)*channels;
                 uint32_t peak=0;
-                if(mode==L"mic" && !(status&AUDCLNT_BUFFERFLAGS_SILENT)) {
+                if(!(status&AUDCLNT_BUFFERFLAGS_SILENT)) {
                     auto samples=reinterpret_cast<int16_t*>(data);
                     for(size_t i=0;i<n;++i) peak=std::max(peak,static_cast<uint32_t>(std::abs(static_cast<int>(samples[i]))));
-                    microphonePeak=peak;
                 }
+                signalPeak=peak;
                 if(status&AUDCLNT_BUFFERFLAGS_SILENT || muted) pending.insert(pending.end(),n,0);
                 else pending.insert(pending.end(),reinterpret_cast<int16_t*>(data),reinterpret_cast<int16_t*>(data)+n);
                 check(source->ReleaseBuffer(frames),"Cannot release captured audio");
@@ -247,7 +247,7 @@ int wmain(int argc, wchar_t** argv) {
                 std::this_thread::sleep_for(100ms);
                 if(running && ++ticks==10) {
                     ticks=0;
-                    uint32_t stats[]={capturedPackets.load(),decodedPackets.load(),renderedSamples.load(),microphonePeak.load()};
+                    uint32_t stats[]={capturedPackets.load(),decodedPackets.load(),renderedSamples.load(),signalPeak.load()};
                     sendFrame(7,stats,sizeof(stats));
                 }
             }
@@ -265,6 +265,11 @@ int wmain(int argc, wchar_t** argv) {
             std::vector<int16_t> samples(FRAME*channels);
             int frames=opus_decode(decoder.get(),data.data()+1,size-1,samples.data(),FRAME,0);
             if(frames!=FRAME) continue;
+            if(mode==L"none") {
+                uint32_t peak=0;
+                for(auto sample : samples) peak=std::max(peak,static_cast<uint32_t>(std::abs(static_cast<int>(sample))));
+                signalPeak=peak;
+            }
             ++decodedPackets;
             std::lock_guard<std::mutex> lock(pcmMutex);
             constexpr int BUFFER_FRAMES=6;

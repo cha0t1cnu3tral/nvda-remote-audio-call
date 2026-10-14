@@ -9,7 +9,7 @@ replace a two-computer test with NVDA; see [validation](docs/VALIDATION.md).
 
 ## Install
 
-Download `remoteAudioCall-0.1.4.nvda-addon` from
+Download `remoteAudioCall-0.1.5.nvda-addon` from
 [Releases](https://github.com/cha0t1cnu3tral/nvda-remote-audio-call/releases).
 Open the file, confirm installation in NVDA, and restart NVDA. Install it on
 both computers. Use a user-writable NVDA configuration or a portable NVDA copy
@@ -105,7 +105,10 @@ whether the call is reconnecting or recovering its audio.
 An audio-helper failure during an established call triggers up to three restart
 attempts, with delays of one, two, and four seconds. Repeated failures end the
 call with an explanation. Computer audio is independent and continues through
-a local call-helper failure; restart computer audio sharing after a network outage.
+a local call-helper failure. Version 0.1.5 also retries computer-audio helper
+failures and restores sharing after brief outages to the same running peer.
+Install 0.1.5 on the controlled computer for sharing recovery. Stop, lock,
+explicit disconnect, changing computers, and the 30-second limit cancel recovery.
 Locking either computer, changing peers, ending the Remote session, restarting
 NVDA, or exceeding the recovery window requires a new call. Secure desktops,
 login screens, and elevation prompts do not carry audio.
@@ -132,6 +135,9 @@ login screens, and elevation prompts do not carry audio.
   to finish. With 0.1.4 on both ends, the accepted call recovers within the
   30-second window. Longer outages require a new call. A sole compatible peer
   is selected directly when you start a call; multiple peers still show a chooser.
+- **Shared audio is silent:** Report status on both computers now distinguishes
+  missing capture, silent samples, missing received audio, and playback. Check
+  the selected speakers and listening volume in Settings on the controller.
 - **Sound delayed:** the existing Remote TCP connection carries audio. Poor
   networks can delay it; queues are bounded to avoid growing backlogs. This
   preview is not a replacement for a dedicated voice service.
@@ -150,7 +156,7 @@ cmake --build build --config Release --parallel
 python scripts/package.py --helper build/Release/remoteAudioHelper.exe
 ```
 
-Output: `dist/remoteAudioCall-0.1.4.nvda-addon` and `dist/SHA256SUMS.txt`.
+Output: `dist/remoteAudioCall-0.1.5.nvda-addon` and `dist/SHA256SUMS.txt`.
 GitHub Actions builds the same archive on each push. Opus 1.6.1 is downloaded
 with a pinned SHA-256 and linked statically, along with the C++ runtime. The
 helper uses an `asInvoker` manifest and communicates through anonymous pipes.

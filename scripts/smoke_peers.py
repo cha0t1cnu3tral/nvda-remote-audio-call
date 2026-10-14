@@ -148,7 +148,8 @@ def main():
             callback()
         pump(lambda: all(plugin.engine.available for plugin in plugins[:2]) and plugins[1].engine.peer != old_id)
         pump(lambda: all(plugin.engine.call.state == "call" for plugin in plugins[:2]))
-        assert all(plugin.engine.call.token == call_token and plugin.engine.audio.state == "idle" for plugin in plugins[:2])
+        pump(lambda: all(plugin.engine.audio.state == "audio" for plugin in plugins[:2]))
+        assert all(plugin.engine.call.token == call_token for plugin in plugins[:2])
         assert plugins[0].engine.muted
         for plugin in plugins[:2]:
             plugin.play.reset_mock()
@@ -157,12 +158,15 @@ def main():
         pump(lambda: all(plugin.play.called for plugin in plugins[:2]))
         plugins[0].play.assert_called_once_with(b"recovered controlled voice", stream="call")
         plugins[1].play.assert_called_once_with(b"recovered controller voice", stream="call")
+        plugins[1].engine.audio._packet(plugins[1].engine.audio.token, b"recovered computer sound")
+        pump(lambda: plugins[0].play.call_count == 2)
+        plugins[0].play.assert_any_call(b"recovered computer sound", stream="audio")
         plugins[0].engine.stop()
         pump(lambda: all(plugin.engine.state == "idle" for plugin in plugins[:2]))
         call(caller=1)
         plugins[1].engine.stop()
         pump(lambda: all(plugin.engine.state == "idle" for plugin in plugins[:2]))
-        print("Three-participant TLS relay passed: " + args.observer + " observer join/leave, addressed simultaneous audio, automatic call recovery with mute and duplex frames, and calls in both directions; no capture opened")
+        print("Three-participant TLS relay passed: " + args.observer + " observer join/leave, addressed simultaneous audio, automatic call and computer-audio recovery with mute and duplex frames, and calls in both directions; no capture opened")
     finally:
         for plugin in plugins:
             if plugin:

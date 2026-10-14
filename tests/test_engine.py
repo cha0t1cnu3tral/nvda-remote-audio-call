@@ -215,6 +215,31 @@ class SessionTests(unittest.TestCase):
         self.b.helpers[-1][3]("loopback stopped")
         self.flush()
         self.assertEqual((self.controller.call.state, self.controlled.call.state), ("call", "call"))
+        self.assertEqual((self.controller.audio.state, self.controlled.audio.state), ("audio", "recovering_audio"))
+        self.now += 1
+        self.controlled.tick()
+        self.b.helpers[-1][2](b"recovered system sound")
+        self.flush()
+        self.assertEqual(self.a.stream_packets["audio"], [b"recovered system sound"])
+
+    def test_computer_audio_receiver_helper_recovers_without_a_call(self):
+        self.audio()
+        self.a.helpers[-1][3]("Playback device was lost")
+        self.now += 1
+        self.controller.tick()
+        self.assertEqual(self.a.helpers[-1][0], "receive")
+        self.b.helpers[-1][2](b"sound after playback recovered")
+        self.flush()
+        self.assertEqual(self.a.stream_packets["audio"], [b"sound after playback recovered"])
+
+    def test_repeated_computer_audio_failure_is_bounded(self):
+        self.audio()
+        for delay in (1, 2, 4):
+            self.b.helpers[-1][3]("Capture device was lost")
+            self.now += delay
+            self.controlled.tick()
+        self.b.helpers[-1][3]("Capture device was lost")
+        self.flush()
         self.assertEqual((self.controller.audio.state, self.controlled.audio.state), ("idle", "idle"))
 
     def test_stop_and_disconnect_clear_both_streams(self):
@@ -422,6 +447,67 @@ class SessionTests(unittest.TestCase):
         self.a.helpers[-1][2](b"after outage")
         self.flush()
         self.assertEqual(self.b.played, [b"before outage", b"after outage"])
+
+    def test_computer_audio_recovers_after_network_outage_without_a_call(self):
+        self.audio()
+        old_token = self.controlled.audio.token
+        self.controller.suspend_call()
+        self.controlled.suspend_call()
+        self.controller.disconnect()
+        self.controlled.disconnect()
+        self.now += 6
+        self.controller.connect("controlling", 2)
+        self.controlled.connect("controlled", 1)
+        self.flush()
+        self.assertEqual((self.controller.audio.state, self.controlled.audio.state), ("audio", "audio"))
+        self.assertNotEqual(self.controlled.audio.token, old_token)
+        self.b.helpers[-1][2](b"recovered computer sound")
+        self.flush()
+        self.assertEqual(self.a.stream_packets["audio"], [b"recovered computer sound"])
+        self.assertEqual((self.controller.call.state, self.controlled.call.state), ("idle", "idle"))
+
+    def test_simultaneous_call_and_computer_audio_recover(self):
+        self.call()
+        self.audio()
+        self.reconnect_call()
+        self.assertEqual((self.controller.call.state, self.controlled.call.state), ("call", "call"))
+        self.assertEqual((self.controller.audio.state, self.controlled.audio.state), ("audio", "audio"))
+
+    def test_pending_computer_audio_recovery_can_be_cancelled(self):
+        self.audio()
+        self.controlled.suspend_call()
+        self.controlled.disconnect()
+        self.controlled.stop()
+        self.controller.disconnect()
+        self.controller.connect("controlling", 2)
+        self.controlled.connect("controlled", 1)
+        self.flush()
+        self.assertEqual((self.controller.audio.state, self.controlled.audio.state), ("idle", "idle"))
+
+    def test_computer_audio_recovery_expires_without_extending_deadline(self):
+        self.audio()
+        self.controlled.suspend_call()
+        expires = self.controlled.suspended_audio["expires"]
+        self.controlled.disconnect()
+        self.now += 20
+        self.controlled.suspend_call()
+        self.assertEqual(self.controlled.suspended_audio["expires"], expires)
+        self.now += 11
+        self.controller.disconnect()
+        self.controller.connect("controlling", 2)
+        self.controlled.connect("controlled", 1)
+        self.flush()
+        self.assertEqual(self.controlled.audio.state, "idle")
+
+    def test_computer_audio_does_not_resume_to_restarted_peer(self):
+        self.audio()
+        self.controlled.suspend_call()
+        self.controlled.disconnect()
+        self.controller.stop()
+        self.controller.call.instance = self.controller.audio.instance = "f"*32
+        self.controlled.connect("controlled", 1)
+        self.flush()
+        self.assertEqual(self.controlled.audio.state, "idle")
 
     def test_hangup_while_disconnected_prevents_peer_resuming(self):
         self.call()
