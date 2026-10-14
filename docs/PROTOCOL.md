@@ -60,8 +60,8 @@ kind and the payload. Types: 1 Opus packet, 2 microphone mute (one byte),
 (helper to plugin).
 Helper type 7 carries four little-endian uint32 values: encoded capture
 packets, decoded playback packets, samples consumed by the playback buffer,
-and the latest signal peak (0–32768). For calls this is microphone input; for sharing it is captured system input
-or decoded receiver input. These local health counters are
+and the latest signal peak (0–32768). For calls this is microphone input;
+for sharing it is captured system input or decoded receiver input. These local health counters are
 not transmitted to the relay. `--mute 1` starts capture muted for diagnostic
 tests; the normal call starts unmuted only after user acceptance.
 Closing/killing the child tears down audio devices. No audio files, listening

@@ -42,7 +42,13 @@ passed. See GitHub release notes for the checks actually completed for a build.
 - Actual NVDA wxPython menu/dialog/settings checks pass with NVDA services stubbed.
 - Public TLS relay checks pass calls and simultaneous streams, plus recovery of
   both streams with plain and add-on observers and changed Remote client IDs.
-- Native build and non-silent stereo signal validation are pending.
+- Windows CI compiled the updated helper and passed codec/package checks.
+- A local non-silent stereo tone passed process capture, Opus encoding/decoding
+  and playback-buffer consumption with receiver volume zero, under a standard
+  user token. No microphone or network was used in this test.
+- Native duplex calls and stereo sharing pass over public TLS with captures
+  muted and playback volume zero, including forced capture/playback helper
+  failures while both streams run.
 - No audible two-computer NVDA session has been verified.
 
 ## 0.1.4 checks completed

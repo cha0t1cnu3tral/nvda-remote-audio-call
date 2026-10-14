@@ -21,7 +21,11 @@ Install **remoteAudioCall-0.1.5.nvda-addon** on both computers and restart NVDA.
 Validation so far: 98 tests pass on Python 3.13 and 3.14; actual NVDA wxPython
 menu/dialog/settings checks pass with NVDA services stubbed. Public TLS relay
 checks pass calls and simultaneous streams, plus call and sharing recovery with
-plain and add-on observers. Native build and signal validation are pending.
+plain and add-on observers. Windows CI compiled the updated helper and passed
+codec/package checks. Local non-administrator checks verified a non-silent
+stereo tone through process capture, Opus decoding and playback-buffer consumption
+with receiver volume zero. Native stereo sharing and helper-recovery tests also
+pass through TLS with captures muted and playback volume zero.
 
 The old helper captures a local test tone successfully; a universal 0.1.4
 capture failure has not been reproduced. The recovery defects above are

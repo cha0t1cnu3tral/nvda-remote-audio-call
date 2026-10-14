@@ -68,11 +68,13 @@ def main():
             if args.native_helper:
                 plugin.settings = dict(input="default", output="default", volume=0)
                 def start_audio(kind, ready, packet, error, current=plugin, stream="call"):
-                    current.stop_audio()
-                    current.native = AdapterTests.plugin_module.NativeAudio(kind, current.settings,
+                    current.stop_audio(stream=stream)
+                    audio = AdapterTests.plugin_module.NativeAudio(kind, current.settings,
                         ready, packet, error, lambda function, *values: function(*values), initial_muted=True)
+                    setattr(current, "audio_native" if stream == "audio" else "native", audio)
                 plugin.start_audio = start_audio
-                plugin.play = Mock(side_effect=lambda packet, current=plugin, stream="call": current.native.play(packet))
+                plugin.play = Mock(side_effect=lambda packet, current=plugin, stream="call":
+                    (current.audio_native if stream == "audio" else current.native).play(packet))
             plugin.supports_system_audio = lambda: True
             transport = Transport()
             session = SimpleNamespace(transport=transport, leaders={} if index == 0 else {identities[index]: {}}, followers={identities[index]: {}} if index == 0 else set())
@@ -121,6 +123,20 @@ def main():
                 assert plugins[caller].engine.call.token == token
                 assert plugins[callee].engine.call.state == "call"
                 print("Forced native-helper failure recovered with the accepted call and duplex audio intact")
+                plugins[1].engine.start_system_audio()
+                pump(lambda: all(p.engine.audio.state == "audio" for p in plugins))
+                pump(lambda: plugins[1].audio_native.stats[0] >= 10
+                     and plugins[0].audio_native.stats[1] >= 10 and plugins[0].audio_native.stats[2] > 0)
+                for index in (1, 0):
+                    failed_audio = plugins[index].audio_native
+                    plugins[index].audio_native.process.kill()
+                    pump(lambda: plugins[index].audio_native is not None
+                         and plugins[index].audio_native is not failed_audio
+                         and plugins[index].engine.audio.state == "audio"
+                         and (plugins[index].audio_native.stats[0] >= 10 if index else
+                              plugins[index].audio_native.stats[1] >= 10 and plugins[index].audio_native.stats[2] > 0))
+                    assert all(p.engine.call.state == "call" for p in plugins)
+                print("Native stereo sharing over TLS and capture/playback helper recovery passed during a call; captures muted, playback volume zero")
             else:
                 for index, plugin in enumerate(plugins):
                     plugin.play.reset_mock()
